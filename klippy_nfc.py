@@ -207,11 +207,18 @@ class KlippyNFC:
                 command.append(sel_res)
                 command.extend(bytes(18))  # FELICA params (not used for Type 4)
 
+                # Debug: Log command buffer
+                logging.info(f"Calling tgInitAsTarget with command ({len(command)} bytes): {command.hex()}")
+
                 # Initialize as target
                 success = self.nfc.tgInitAsTarget(command, 1000)
 
+                # Debug: Log result
+                logging.info(f"tgInitAsTarget returned: {success}")
+
                 if success <= 0:
                     # No activation or timeout, continue loop
+                    logging.debug("No target activation, continuing...")
                     time.sleep(0.1)
                     continue
 
