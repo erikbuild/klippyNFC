@@ -26,10 +26,10 @@ sudo reboot
 
 ### 3. Install Plugin
 
-Copy `klippynfc.py` to your Klipper extras directory:
+Copy `klippy_nfc.py` to your Klipper extras directory:
 
 ```bash
-cp klippynfc.py ~/klipper/klippy/extras/
+cp klippy_nfc.py ~/klipper/klippy/extras/
 ```
 
 ### 4. Wire PN532 to Raspberry Pi
