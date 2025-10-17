@@ -1,6 +1,6 @@
 ################################################################################
 #                                                                              #
-#  KlippyNFC - NFC Tag Emulation for Klipper                                   #
+#  klippyNFC - NFC Tag Emulation for Klipper                                   #
 #                                                                              #
 #  Author: Erik Reynolds (erikbuild)                                           #
 #  Repository: https://github.com/erikbuild/klippyNFC                          #
@@ -18,7 +18,7 @@ import socket
 import logging
 import time
 
-class NFCEmulator:
+class KlippyNFC:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name()
@@ -291,4 +291,4 @@ class NFCEmulator:
         gcode.respond_info("NFC emulation restarted")
 
 def load_config(config):
-    return NFCEmulator(config)
+    return KlippyNFC(config)
