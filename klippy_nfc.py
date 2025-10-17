@@ -29,10 +29,10 @@ class KlippyNFC:
         self.name = config.get_name()
 
         # Configuration
-        self.spi_bus = config.getint('spi_bus', 0)
+        self.spi_bus = config.getint('spi_bus', 0) # 0=SPI0, 1=SPI1
         self.spi_ce = config.getint('spi_ce', 0)  # 0=CE0 (GPIO8), 1=CE1 (GPIO7)
         self.url_override = config.get('url', None)
-        self.port = config.getint('port', 7125)
+        self.port = config.getint('port', 80)
         self.uid = config.get('uid', '010203')
 
         # State
@@ -203,8 +203,8 @@ class KlippyNFC:
                 sel_res = 0x60
 
                 # Build command buffer for tgInitAsTarget
-                # Format: MODE + SENS_RES + UID + SEL_RES + FELICA params
-                command = bytearray([mode])
+                # Format: 0x8C (command code) + MODE + SENS_RES + UID + SEL_RES + FELICA params
+                command = bytearray([0x8C, mode])  # 0x8C = TgInitAsTarget command
                 command.extend(sens_res)
                 command.extend(uid_bytes)
                 command.append(sel_res)
