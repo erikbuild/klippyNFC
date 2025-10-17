@@ -156,6 +156,8 @@ class KlippyNFC:
             spi = Pn532Spi(self.spi_cs_pin)
             self.nfc = Pn532(spi)
 
+            logging.info(f"Initializing PN532 on SPI bus {self.spi_bus}, CS pin {self.spi_cs_pin}")
+
             # Begin communication
             self.nfc.begin()
 
