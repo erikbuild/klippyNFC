@@ -163,13 +163,16 @@ class KlippyNFC:
                 # SEL_RES (ISO14443-4 compliant)
                 sel_res = 0x60
 
+                # Build command buffer for tgInitAsTarget
+                # Format: MODE + SENS_RES + UID + SEL_RES + FELICA params
+                command = bytearray([mode])
+                command.extend(sens_res)
+                command.extend(uid_bytes)
+                command.append(sel_res)
+                command.extend(bytes(18))  # FELICA params (not used for Type 4)
+
                 # Initialize as target
-                success = self.nfc.tgInitAsTarget(
-                    mode=mode,
-                    mifareParams=sens_res + uid_bytes + bytes([sel_res]),
-                    felicaParams=bytes(18),  # Not used for Type 4
-                    timeout=1000
-                )
+                success = self.nfc.tgInitAsTarget(command, 1000)
 
                 if success <= 0:
                     # No activation or timeout, continue loop
@@ -222,17 +225,17 @@ class KlippyNFC:
                 # Handle SELECT command (0xA4)
                 if ins == 0xA4:
                     # Send success response
-                    self.nfc.tgSetData(bytes([0x90, 0x00]))
+                    self.nfc.tgSetData(bytearray([0x90, 0x00]))
 
                 # Handle READ BINARY command (0xB0)
                 elif ins == 0xB0:
                     # Send NDEF data
-                    response = ndef_data + bytes([0x90, 0x00])
+                    response = bytearray(ndef_data) + bytearray([0x90, 0x00])
                     self.nfc.tgSetData(response)
 
                 else:
                     # Unsupported command
-                    self.nfc.tgSetData(bytes([0x6A, 0x82]))
+                    self.nfc.tgSetData(bytearray([0x6A, 0x82]))
 
         except Exception as e:
             logging.error(f"Error handling Type 4 commands: {e}")
