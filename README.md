@@ -55,7 +55,7 @@ Add to your `printer.cfg`:
 [klippy_nfc]
 # SPI configuration
 spi_bus: 0              # Default: 0 (SPI0)
-spi_cs_pin: 8           # Default: 8 (GPIO8/CE0)
+spi_ce: 0               # Default: 0 (CE0=GPIO8/Pin24), use 1 for CE1=GPIO7/Pin26
 
 # Network configuration
 port: 7125              # Default: 7125 (Moonraker default port)

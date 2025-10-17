@@ -30,7 +30,7 @@ class KlippyNFC:
 
         # Configuration
         self.spi_bus = config.getint('spi_bus', 0)
-        self.spi_cs_pin = config.getint('spi_cs_pin', 8)
+        self.spi_ce = config.getint('spi_ce', 0)  # 0=CE0 (GPIO8), 1=CE1 (GPIO7)
         self.url_override = config.get('url', None)
         self.port = config.getint('port', 7125)
         self.uid = config.get('uid', '010203')
@@ -153,10 +153,10 @@ class KlippyNFC:
             from pn532pi import Pn532, Pn532Spi
 
             # Initialize SPI interface
-            spi = Pn532Spi(self.spi_cs_pin)
+            spi = Pn532Spi(self.spi_ce)
             self.nfc = Pn532(spi)
 
-            logging.info(f"Initializing PN532 on SPI bus {self.spi_bus}, CS pin {self.spi_cs_pin}")
+            logging.info(f"Initializing PN532 on SPI{self.spi_bus} CE{self.spi_ce}")
 
             # Begin communication
             self.nfc.begin()
