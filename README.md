@@ -5,16 +5,16 @@ A Klipper plugin that uses a PN532 NFC module to emulate an NFC tag presenting y
 ## Hardware Requirements
 
 - PN532 NFC breakout board
-- Raspberry Pi 4 (or compatible) with I2C enabled
+- Raspberry Pi 4 (or compatible) with SPI enabled
 - External 3.3V or 5V power supply for PN532 (Pi's 3.3V regulator insufficient)
 
 ## Installation
 
-### 1. Enable I2C on Raspberry Pi
+### 1. Enable SPI on Raspberry Pi
 
 ```bash
 sudo raspi-config
-# Navigate to: Interface Options -> I2C -> Enable
+# Navigate to: Interface Options -> SPI -> Enable
 sudo reboot
 ```
 
@@ -34,16 +34,18 @@ cp klippy_nfc.py ~/klipper/klippy/extras/
 
 ### 4. Wire PN532 to Raspberry Pi
 
-**PN532 I2C Mode Wiring:**
+**PN532 SPI Mode Wiring:**
 
 | PN532 Pin | RPi Pin | Description |
 |-----------|---------|-------------|
 | VCC       | External 3.3V/5V | Power (DO NOT use Pi's 3.3V) |
 | GND       | GND (Pin 6) | Ground |
-| SDA       | GPIO 2 (Pin 3) | I2C Data |
-| SCL       | GPIO 3 (Pin 5) | I2C Clock |
+| SCK       | GPIO 11 (Pin 23) | SPI Clock |
+| MISO      | GPIO 9 (Pin 21) | SPI MISO |
+| MOSI      | GPIO 10 (Pin 19) | SPI MOSI |
+| SS        | GPIO 8 (Pin 24) | SPI Chip Select (default) |
 
-**Important:** Set PN532 to I2C mode using the onboard switches (typically: SW1=ON, SW2=OFF).
+**Important:** Set PN532 to SPI mode using the onboard switches (typically: SW1=OFF, SW2=ON).
 
 ### 5. Configure Klipper
 
@@ -51,8 +53,9 @@ Add to your `printer.cfg`:
 
 ```ini
 [klippy_nfc]
-# I2C configuration
-i2c_bus: 1              # Default: 1 (I2C bus 1 on Raspberry Pi)
+# SPI configuration
+spi_bus: 0              # Default: 0 (SPI0)
+spi_cs_pin: 8           # Default: 8 (GPIO8/CE0)
 
 # Network configuration
 port: 7125              # Default: 7125 (Moonraker default port)
@@ -121,10 +124,10 @@ Android devices generally have better compatibility with PN532 card emulation.
 ### Common Issues
 
 **"Failed to initialize PN532"**
-- Check I2C wiring connections
-- Verify I2C is enabled: `ls /dev/i2c-1`
+- Check SPI wiring connections
+- Verify SPI is enabled: `ls /dev/spidev0.0`
 - Ensure PN532 has adequate power supply
-- Check PN532 mode switches (should be set to I2C)
+- Check PN532 mode switches (should be set to SPI)
 
 **"pn532pi library not found"**
 ```bash
