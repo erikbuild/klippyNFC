@@ -1,188 +1,462 @@
-# KlippyNFC - NFC Tag to Web Interface for Klipper
+# KlippyNFC - NFC Tag Reader/Writer for Klipper and PN532 Modules
 
-A Klipper plugin that uses a PN532 NFC module to emulate an NFC tag presenting your Klipper web interface URL (usually Mainsail). Tap your phone to the NFC module and instantly access your printer's web interface.
+A Klipper plugin to read and write with a PN532 NFC module.
+
+Write an NFC Tag with the Klipper Web Interface URL.
+Experimental support for working with OpenPrintTags (COMING SOON!)
+
+## Table of Contents
+
+- [Hardware Requirements](#hardware-requirements)
+- [Setup](#setup)
+- [Usage](#usage)
+  - [First-Time Tag Writing](#first-time-tag-writing)
+  - [G-Code Commands Reference](#g-code-commands-reference)
+  - [Common Workflows](#common-workflows)
+- [Troubleshooting](#troubleshooting)
+  - [Hardware Issues](#hardware-issues)
+  - [Debugging](#debugging)
+- [Technical Details](#technical-details)
+- [Future Enhancements](#future-enhancements)
+
+---
 
 ## Hardware Requirements
 
-- PN532 NFC breakout board
-- Raspberry Pi 4 (or compatible) with I2C enabled
-- External 3.3V or 5V power supply for PN532 (Pi's 3.3V regulator insufficient)
+### Required Hardware
 
-## Installation
+- **PN532 NFC Breakout Board**
+  - HiLetGo / Elechouse Generic board: https://amzn.to/49rhoYL (affiliate link)
+  - Must support SPI mode (most do)
+  - ~$8-10 USD
 
-### 1. Enable I2C on Raspberry Pi
+- **Raspberry Pi with SPI**
+  - Tested on: Raspberry Pi 4, Pi 3B+
+  - Should work on: Pi Zero 2W, Pi 5
+  - SPI interface must be enabled
+
+- **External Power Supply for PN532**
+  - Use external 3.3V or 5V power supply (check your PN532 voltage rating)
+  - Recommended: Share Pi's 5V rail with proper decoupling capacitor (some boards include this)
+  - **DO NOT** power PN532 from Pi's 3.3V pin - causes brownouts
+
+### NFC Tags (Recommended)
+
+**Best Choice: NTAG215**
+- Black 25mm Adhesive NTAG215 https://amzn.to/4oRBIHr (affiliate link)
+- White 25mm Adhesive NTAG215 https://amzn.to/47iB1kn (affiliate link)
+- 504 bytes usable memory (plenty for URLs)
+- Works with all modern phones (iPhone 7+, Android)
+- Standard NFC Forum Type 2 tag
+- Cost: ~$0.25 per tag in bulk
+
+**Alternative Options:**
+- **NTAG213** - 144 bytes (sufficient for most URLs, cheaper)
+- **NTAG216** - 888 bytes (overkill for URLs, more expensive)
+- **MIFARE Ultralight** - 48 bytes (too small, not recommended)
+
+### Wiring Supplies
+
+- Jumper wires (female-to-female recommended)
+
+## Setup
+
+### Step 1: Enable SPI on Raspberry Pi
+
+The PN532 communicates via SPI, which must be enabled:
 
 ```bash
 sudo raspi-config
-# Navigate to: Interface Options -> I2C -> Enable
+```
+
+Navigate: `3 Interface Options` → `I4 SPI` → `Yes` → `OK` → `Finish`
+
+Reboot the Pi:
+```bash
 sudo reboot
 ```
 
-### 2. Install Python Dependencies
+Verify SPI is enabled:
+```bash
+ls /dev/spidev0.*
+# Should show: /dev/spidev0.0  /dev/spidev0.1
+```
+
+### Step 2: Install Python Dependencies
+
+Install the `pn532pi` library in Klipper's Python environment:
 
 ```bash
 ~/klippy-env/bin/pip install pn532pi
 ```
 
-### 3. Install Plugin
-
-Copy `klippynfc.py` to your Klipper extras directory:
-
+Verify installation:
 ```bash
-cp klippynfc.py ~/klipper/klippy/extras/
+~/klippy-env/bin/pip show pn532pi
 ```
 
-### 4. Wire PN532 to Raspberry Pi
+### Step 3: Install Plugin
 
-**PN532 I2C Mode Wiring:**
+Copy the plugin file to Klipper's extras directory:
 
-| PN532 Pin | RPi Pin | Description |
-|-----------|---------|-------------|
-| VCC       | External 3.3V/5V | Power (DO NOT use Pi's 3.3V) |
-| GND       | GND (Pin 6) | Ground |
-| SDA       | GPIO 2 (Pin 3) | I2C Data |
-| SCL       | GPIO 3 (Pin 5) | I2C Clock |
+```bash
+# If you cloned the repo:
+cd /path/to/klippyNFC
+cp klippy_nfc.py ~/klipper/klippy/extras/
 
-**Important:** Set PN532 to I2C mode using the onboard switches (typically: SW1=ON, SW2=OFF).
+# Or download directly:
+wget https://raw.githubusercontent.com/erikbuild/klippyNFC/main/klippy_nfc.py -O ~/klipper/klippy/extras/klippy_nfc.py
+```
 
-### 5. Configure Klipper
+### Step 4: Wire PN532 to Raspberry Pi
 
-Add to your `printer.cfg`:
+**Set PN532 to SPI Mode:**
+
+Before wiring, configure the PN532 mode switches:
+- Most PN532 boards have two small DIP switches (SW1, SW2)
+- **For SPI mode:** SW1=OFF, SW2=ON
+- Consult your specific board's documentation if different
+
+**Wiring Table:**
+
+| PN532 Pin | RPi Pin (Physical) | RPi GPIO | Description |
+|-----------|-------------------|----------|-------------|
+| VCC       | **See warning below** | - | Power (3.3V or 5V depending on board) |
+| GND       | Pin 6 (or any GND) | Ground | Ground |
+| SCK       | Pin 23 | GPIO 11 | SPI Clock (SCLK) |
+| MISO      | Pin 21 | GPIO 9 | SPI MISO (Master In, Slave Out) |
+| MOSI      | Pin 19 | GPIO 10 | SPI MOSI (Master Out, Slave In) |
+| SS (NSS)  | Pin 24 | GPIO 8 | SPI Chip Select (CE0) |
+
+**⚠️ POWER WARNING:**
+- **DO NOT** connect VCC to Pi's 3.3V pin (Pin 1 or 17)
+- The PN532 draws too much current and will cause brownouts
+- **Options for proper power:**
+  - Use external 3.3V/5V power supply with shared ground
+  - Connect to Pi's 5V pin (Pin 2 or 4) **only if** your PN532 has a 5V→3.3V regulator
+- When in doubt, check your PN532's voltage rating and current requirements
+
+**Wiring Diagram:**
+```
+Raspberry Pi          PN532 (SPI Mode)
+┌──────────┐         ┌────────────┐
+│  Pin 23  │────────▶│ SCK        │
+│  Pin 21  │◀────────│ MISO       │
+│  Pin 19  │────────▶│ MOSI       │
+│  Pin 24  │────────▶│ SS         │
+│  Pin 6   │────────▶│ GND        │
+│  Pin 2   │────────▶│ VCC        │
+└──────────┘         └────────────┘
+```
+
+### Step 5: Configure Klipper
+
+Add this section to your `printer.cfg`:
 
 ```ini
 [klippy_nfc]
-# I2C configuration
-i2c_bus: 1              # Default: 1 (I2C bus 1 on Raspberry Pi)
+# SPI Configuration (required)
+spi_bus: 0              # SPI bus number: 0 for SPI0 (default), 1 for SPI1
+spi_ce: 0               # Chip select: 0 for CE0/GPIO8 (default), 1 for CE1/GPIO7
 
-# Network configuration
-port: 7125              # Default: 7125 (Moonraker default port)
-# url: http://custom.local:7125  # Optional: Override auto-detected URL
-
-# NFC tag UID (hex string, 3 bytes)
-uid: 010203             # Default: 010203
+# URL Configuration (optional)
+port: 80              # Web interface port (default: 80 for Mainsail)
+# url: http://192.168.1.100:80  # Explicit URL override (auto-detected if not set)
 ```
 
-### 6. Restart Klipper
+**Configuration Notes:**
+- `spi_bus` and `spi_ce` defaults match standard wiring above
+- `port` should match your Mainsail configuration (usually 80)
+- `url` is auto-detected from hostname/IP if not specified
+- If your network uses mDNS, the auto-detected URL will use `.local` domain
+
+### Step 6: Restart Klipper
+
+Apply the configuration changes:
 
 ```bash
 sudo systemctl restart klipper
 ```
 
+Check for errors:
+```bash
+tail -50 ~/printer_config/logs/klippy.log
+```
+
+Look for:
+- `NFC tag writer ready. Use NFC_WRITE_TAG to write tags with URL: http://...`
+- **No errors** about PN532 initialization
+
+If you see `Failed to initialize PN532`, check wiring and power supply.
+
 ## Usage
 
-### G-Code Commands
+### First-Time Tag Writing
 
-**NFC_STATUS**
-Display current NFC emulation status:
+**Step-by-step:**
+
+1. **Prepare a blank NFC tag** (NTAG215 recommended)
+
+2. **Place tag on PN532 reader**
+   - Position tag flat against the PN532 antenna
+   - Tag should be centered over the chip
+   - Keep phone away during writing to avoid interference
+
+3. **Open your Klipper web interface** (Mainsail/Fluidd)
+   - Navigate to the G-code console
+
+4. **Run the write command:**
+   ```gcode
+   NFC_WRITE_TAG
+   ```
+
+5. **Wait for completion**
+   - You should see:
+     ```
+     Scanning for NFC tag...
+     Tag detected: 04a1b2c3d4e5f6
+     Writing URL: http://printer.local:7125
+     Success! Successfully wrote 48 bytes (12 pages)
+     ```
+
+6. **Remove tag**
+   - Your tag is now programmed!
+   - Test by tapping your phone to it
+
+### G-Code Commands Reference
+
+#### NFC_WRITE_TAG
+
+Write the current URL to an NFC tag.
+
+**Basic usage:**
+```gcode
+NFC_WRITE_TAG
+```
+
+**With custom URL:**
+```gcode
+NFC_WRITE_TAG URL=http://192.168.1.100:7125
+```
+
+**With custom port:**
+```gcode
+NFC_WRITE_TAG URL=http://ender3.local:80
+```
+
+**Examples:**
+```gcode
+# Write tag for Mainsail on default port
+NFC_WRITE_TAG
+
+# Write tag for specific IP and port
+NFC_WRITE_TAG URL=http://10.0.1.50:7125
+
+# Write tag for Fluidd
+NFC_WRITE_TAG URL=http://fluidd.local:7125
+
+# Write tag for custom port
+NFC_WRITE_TAG URL=http://prusa-mk4.local:8080
+```
+
+**Output:**
+```
+Scanning for NFC tag...
+Tag detected: 04123456789abc
+Writing URL: http://printer.local:7125
+Success! Successfully wrote 48 bytes (12 pages)
+```
+
+**Errors:**
+```
+Error: No NFC tag detected. Place tag on reader and try again.
+Error: Failed to write page 5
+```
+
+#### NFC_STATUS
+
+Display current tag writer status and configuration.
+
+**Usage:**
 ```gcode
 NFC_STATUS
 ```
-Output:
+
+**Output when never written:**
 ```
-NFC Emulation: running
 Current URL: http://printer.local:7125
-Error count: 0
+Last write: Not written yet
 ```
 
-**NFC_SET_URL**
-Change the emulated URL dynamically:
+**Output after successful write:**
+```
+Current URL: http://printer.local:7125
+Last write: Successfully wrote 48 bytes (12 pages)
+Write time: 2025-01-15 14:23:45
+```
+
+**Output after failed write:**
+```
+Current URL: http://printer.local:7125
+Last write: Failed: No tag detected
+Write time: 2025-01-15 14:20:12
+```
+
+#### NFC_SET_URL
+
+Change the URL that will be written to future tags.
+
+**Usage:**
 ```gcode
+NFC_SET_URL URL=http://new-url.local:7125
+```
+
+**Examples:**
+```gcode
+# Change to specific IP
 NFC_SET_URL URL=http://192.168.1.100:7125
+
+# Change to custom domain
+NFC_SET_URL URL=http://my-printer.home:7125
+
+# Change port
+NFC_SET_URL URL=http://printer.local:80
 ```
 
-**NFC_RESTART**
-Restart NFC emulation (useful after configuration changes):
-```gcode
-NFC_RESTART
+**Output:**
+```
+NFC URL updated to: http://192.168.1.100:7125
 ```
 
-### Using with Your Phone
-
-1. Ensure NFC is enabled on your phone
-2. Tap your phone to the PN532 module
-3. Your phone should prompt you to open the Klipper web interface URL
-4. Tap to open in your browser
+**Notes:**
+- This only affects future tag writes
+- Already-written tags are not affected
+- Change persists until Klipper restart (reverts to config/auto-detected URL)
+- Use this for writing multiple tags with different URLs
 
 ## Troubleshooting
 
-### iPhone Compatibility
+### Phone Compatibility
 
-**Known Issue:** iPhone NFC reading of PN532 emulated tags is limited and unreliable:
-- Maximum 47 bytes can be transmitted
-- Detection may fail entirely
-- Works better on newer iPhones (XR and later)
+Physical NFC tags written by this plugin are standard NDEF format and work with:
 
-**Workaround:** If iPhone compatibility is critical, consider using the PN532 in reader/writer mode to program a physical NFC sticker instead.
+- ✅ **iPhone 7 and later** (iOS 14+ required for automatic reading)
+  - Works in background - no app needed
+  - Notification appears when tag is detected
 
-### Android Compatibility
+- ✅ **Android phones with NFC** (Android 4.0+)
+  - NFC must be enabled in Settings
+  - Opens browser automatically
 
-Android devices generally have better compatibility with PN532 card emulation.
+### Hardware Issues
 
-### Common Issues
+#### "Failed to initialize PN532"
 
-**"Failed to initialize PN532"**
-- Check I2C wiring connections
-- Verify I2C is enabled: `ls /dev/i2c-1`
-- Ensure PN532 has adequate power supply
-- Check PN532 mode switches (should be set to I2C)
+**Symptom:** Klipper log shows `Failed to initialize PN532, NFC tag writing disabled`
 
-**"pn532pi library not found"**
+**Causes and fixes:**
+1. **Wiring problems**
+   - Double-check all 6 connections (VCC, GND, SCK, MISO, MOSI, SS)
+   - Ensure wires are firmly seated
+   - Try different jumper wires (they can be faulty)
+   - Check for cold solder joints if you soldered connections
+
+2. **SPI not enabled**
+   - Verify: `ls /dev/spidev0.*` should show devices
+   - Re-run: `sudo raspi-config` → Interface Options → SPI → Enable
+   - Reboot after enabling
+
+3. **Wrong SPI mode**
+   - Check PN532 mode switches: SW1=OFF, SW2=ON for SPI
+   - Power cycle PN532 after changing switches
+   - Some boards use jumpers instead of switches - check your board's docs
+
+4. **Power supply insufficient**
+   - PN532 needs stable 3.3V or 5V (check your board's specs)
+   - **DO NOT** use Pi's 3.3V pin (Pin 1/17) - insufficient current
+   - Use external power supply or Pi's 5V pin (if your board has regulator)
+   - Add 10μF capacitor between VCC and GND for stability
+
+5. **Wrong chip select pin**
+   - Default uses CE0 (GPIO 8, Pin 24)
+   - If using CE1: change `spi_ce: 1` in config
+   - Verify wiring matches config
+
+#### "pn532pi library not found"
+
+**Symptom:** Import error in Klipper logs
+
+**Fix:**
 ```bash
+# Install in Klipper's Python environment
+~/klippy-env/bin/pip install pn532pi
+
+# Verify installation
+~/klippy-env/bin/pip show pn532pi
+
+# If still not found, try reinstalling
+~/klippy-env/bin/pip uninstall pn532pi
 ~/klippy-env/bin/pip install pn532pi
 ```
 
-**Random resets or communication failures**
-- PN532 likely underpowered
-- Connect external 3.3V or 5V power supply
-- Do NOT power from Pi's 3.3V pin
+#### Test PN532 Directly
 
-**URL shows "printer.local" but doesn't work**
-- Set explicit URL in config:
-```ini
-[klippy_nfc]
-url: http://192.168.1.100:7125  # Use your Pi's IP address
-```
+Verify PN532 works outside of Klipper:
 
-### Viewing Logs
-
-Check Klipper logs for NFC-related messages:
 ```bash
-tail -f /tmp/klippy.log | grep -i nfc
+# Activate Klipper's Python environment
+source ~/klippy-env/bin/activate
+
+# Test Python script
+python3 << 'EOF'
+from pn532pi import Pn532, Pn532Spi
+
+spi = Pn532Spi(0)  # CE0
+nfc = Pn532(spi)
+nfc.begin()
+
+version = nfc.getFirmwareVersion()
+if version:
+    print(f"PN532 firmware version: {version:#x}")
+    print("PN532 is working!")
+else:
+    print("Failed to communicate with PN532")
+EOF
 ```
+
+If this fails, it's a hardware/wiring issue, not a Klipper issue.
+
+#### Common Log Errors and Meanings
+
+| Error Message | Meaning | Fix |
+|---------------|---------|-----|
+| `Failed to communicate with PN532` | No response from PN532 | Check wiring, power, SPI mode |
+| `pn532pi library not found` | Python dependency missing | Install pn532pi |
+| `No NFC tag detected` | Tag not in range or incompatible | Check tag type, placement |
+| `Failed to write page X` | Write operation failed | Check tag protection, memory |
+| `Chip select must be 1 or 0` | Invalid config value | Fix `spi_ce` in printer.cfg |
 
 ## Technical Details
 
-### NFC Tag Emulation
-
-- **Tag Type:** NFC Forum Type 4 Tag
-- **Protocol:** ISO/IEC 14443-4 (ISO-DEP)
-- **NDEF Record:** URI Record with URL prefix compression
-- **Mode:** Passive target emulation
-
 ### URL Discovery
 
-The plugin automatically discovers the web interface URL:
-1. Gets system hostname via `socket.gethostname()`
-2. Falls back to IP address if hostname is "localhost"
-3. Uses configured port (default: 7125 for Moonraker)
-4. Can be overridden with `url` config parameter
+The plugin automatically discovers your web interface URL:
 
-### Thread Safety
+1. **Hostname lookup:** `socket.gethostname()`
+2. **IP fallback:** If hostname is "localhost", connects to 8.8.8.8 to determine local IP
+3. **Port configuration:** Uses `port` parameter (default 7125)
+4. **Manual override:** `url` parameter takes precedence if set
 
-NFC emulation runs in a daemon background thread, preventing blocking of Klipper's main event loop.
-
-## Limitations
-
-- iPhone compatibility limited (47-byte max, unreliable)
-- Type 4 tag protocol simplified (may not work with all readers)
-- Requires external power for PN532
+**Example auto-detected URLs:**
+- `http://mainsailos.local:80` (hostname with mDNS)
+- `http://192.168.1.100:80` (IP address)
+- `http://prusawire.local:80` (custom hostname)
 
 ## Future Enhancements
 
-- Support for physical NFC tag writing mode
-- Material tracking with NFC tags
-- Access control via NFC authentication
-- Multi-URL profiles (e.g., Mainsail, Fluidd, Moonraker)
+**Planned Features:**
+- Tag reading capability (verify written URL)
+- OpenPrintTag!
 
 ## License
 
@@ -195,5 +469,3 @@ Contributions welcome! Please test thoroughly with your hardware before submitti
 ## Acknowledgments
 
 - Built on [pn532pi](https://github.com/gassajor000/pn532pi) by gassajor000
-- Inspired by Seeed Studio's PN532 Arduino library
-- NFC Forum for NDEF specifications
