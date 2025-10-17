@@ -203,12 +203,16 @@ class KlippyNFC:
                 sel_res = 0x60
 
                 # Build command buffer for tgInitAsTarget
-                # Format: 0x8C (command code) + MODE + SENS_RES + UID + SEL_RES + FELICA params
+                # Format: 0x8C + MODE + MIFARE params (6) + FELICA params (18) + NFCID3t (10)
                 command = bytearray([0x8C, mode])  # 0x8C = TgInitAsTarget command
-                command.extend(sens_res)
-                command.extend(uid_bytes)
-                command.append(sel_res)
-                command.extend(bytes(18))  # FELICA params (not used for Type 4)
+                # MIFARE parameters (6 bytes total)
+                command.extend(sens_res)           # SENS_RES (2 bytes)
+                command.extend(uid_bytes)          # NFCID1t/UID (3 bytes)
+                command.append(sel_res)            # SEL_RES (1 byte)
+                # Felica parameters (18 bytes) - not used for Type 4
+                command.extend(bytes(18))
+                # NFCID3t (10 bytes) - required by PN532
+                command.extend(bytes(10))
 
                 # Debug: Log command buffer
                 logging.info(f"Calling tgInitAsTarget with command ({len(command)} bytes): {command.hex()}")
