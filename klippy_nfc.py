@@ -196,8 +196,8 @@ class KlippyNFC:
                 # Mode: Passive only (0x01)
                 mode = 0x01
 
-                # SENS_RES (ISO14443A)
-                sens_res = bytes([0x00, 0x40])
+                # SENS_RES (ISO14443A) - 0x0400 indicates Type 4 tag
+                sens_res = bytes([0x04, 0x00])
 
                 # SEL_RES (ISO14443-4 compliant)
                 sel_res = 0x60
