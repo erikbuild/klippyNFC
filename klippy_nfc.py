@@ -18,11 +18,6 @@ import socket
 import logging
 import time
 
-# Type 4 tag constants
-NDEF_AID = bytes([0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01])  # NDEF application ID
-CC_FILE_ID = bytes([0xE1, 0x03])  # Capability Container file ID
-NDEF_FILE_ID = bytes([0xE1, 0x04])  # NDEF message file ID
-
 class KlippyNFC:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -116,36 +111,49 @@ class KlippyNFC:
 
         return bytes(ndef_message)
 
-    def _build_capability_container(self, ndef_size):
-        """Build a Capability Container file for Type 4 tag
+    def _build_type2_memory(self, ndef_data):
+        """Build Type 2 tag memory layout
 
-        CC file structure:
-        - Bytes 0-1: CC length (0x000F = 15 bytes)
-        - Byte 2: Mapping version (0x20 = version 2.0)
-        - Bytes 3-4: Maximum R-APDU data size (MLe) (0x003B = 59 bytes)
-        - Bytes 5-6: Maximum C-APDU data size (MLc) (0x0034 = 52 bytes)
-        - Bytes 7-14: NDEF File Control TLV:
-          - Byte 7: T (0x04 = NDEF File Control TLV)
-          - Byte 8: L (0x06 = 6 bytes of data)
-          - Bytes 9-10: File ID (0xE104)
-          - Bytes 11-12: Maximum NDEF file size
-          - Byte 13: Read access (0x00 = free)
-          - Byte 14: Write access (0xFF = no write access)
+        Type 2 tags use 16-byte pages:
+        - Pages 0-3: UID + lock bytes (readonly, managed by PN532)
+        - Page 4: Capability Container
+        - Page 5+: NDEF message in TLV format
+
+        Returns bytes representing the full memory content starting from page 4
         """
-        cc = bytearray([
-            0x00, 0x0F,        # CCLEN (15 bytes)
-            0x20,              # Mapping version 2.0
-            0x00, 0x3B,        # MLe (max 59 bytes can be read at once)
-            0x00, 0x34,        # MLc (max 52 bytes can be sent at once)
-            0x04,              # T: NDEF File Control TLV
-            0x06,              # L: 6 bytes follow
-            0xE1, 0x04,        # File ID (0xE104)
-            (ndef_size >> 8) & 0xFF,  # Max NDEF size (high byte)
-            ndef_size & 0xFF,          # Max NDEF size (low byte)
-            0x00,              # Read access: free
-            0xFF,              # Write access: no write
-        ])
-        return bytes(cc)
+        memory = bytearray()
+
+        # Page 4: Capability Container
+        # E1 = NDEF Magic Number
+        # 10 = Version 1.0
+        # Size = (total_bytes / 8), we'll use a reasonable max
+        # 00 = Read/Write access
+        memory.extend([0xE1, 0x10, 0x6D, 0x00])  # CC: supports ~880 bytes
+        memory.extend([0x00] * 12)  # Rest of page 4
+
+        # Page 5+: NDEF TLV
+        # 03 = NDEF Message TLV
+        # Length byte(s)
+        # NDEF message
+        # FE = Terminator TLV
+        memory.append(0x03)  # NDEF Message TLV
+
+        # Length encoding (1 or 3 bytes)
+        if len(ndef_data) < 255:
+            memory.append(len(ndef_data))
+        else:
+            memory.append(0xFF)
+            memory.append((len(ndef_data) >> 8) & 0xFF)
+            memory.append(len(ndef_data) & 0xFF)
+
+        memory.extend(ndef_data)
+        memory.append(0xFE)  # Terminator TLV
+
+        # Pad to 16-byte boundary
+        while len(memory) % 16 != 0:
+            memory.append(0x00)
+
+        return bytes(memory)
 
     def _init_pn532(self):
         """Initialize the PN532 hardware"""
@@ -196,11 +204,11 @@ class KlippyNFC:
                 # Mode: Passive only (0x01)
                 mode = 0x01
 
-                # SENS_RES (ISO14443A) - 0x0400 indicates Type 4 tag
-                sens_res = bytes([0x04, 0x00])
+                # SENS_RES (ISO14443A) - 0x4400 indicates Type 2 tag (NTAG/Ultralight)
+                sens_res = bytes([0x44, 0x00])
 
-                # SEL_RES (ISO14443-4 compliant)
-                sel_res = 0x60
+                # SEL_RES for Type 2 (no ISO14443-4)
+                sel_res = 0x00
 
                 # Build command buffer for tgInitAsTarget
                 # Format: 0x8C + MODE + MIFARE params (6) + FELICA params (18) + NFCID3t (10)
@@ -231,8 +239,8 @@ class KlippyNFC:
 
                 logging.info("NFC target activated")
 
-                # Handle Type 4 tag APDU commands
-                self._handle_type4_commands(ndef_data)
+                # Handle Type 2 tag memory commands
+                self._handle_type2_commands(ndef_data)
 
                 # Reset error count on successful interaction
                 self.error_count = 0
@@ -248,125 +256,72 @@ class KlippyNFC:
 
                 time.sleep(1)
 
-    def _handle_type4_commands(self, ndef_data):
-        """Handle APDU commands for Type 4 tag protocol
+    def _handle_type2_commands(self, ndef_data):
+        """Handle Type 2 tag memory READ commands
 
-        Implements proper Type 4 tag APDU command sequence:
-        1. SELECT NDEF application (by AID)
-        2. SELECT Capability Container file
-        3. READ Capability Container
-        4. SELECT NDEF file
-        5. READ NDEF message
+        Type 2 tags use simple memory-based protocol:
+        - READ command (0x30 + page): Returns 16 bytes (4 pages)
+        - Memory layout: Pages 0-3 (UID/locks by PN532), Pages 4+ (our data)
         """
-        # Build Capability Container
-        # NDEF message format: 2-byte length + NDEF data
-        ndef_with_length = bytearray([(len(ndef_data) >> 8) & 0xFF, len(ndef_data) & 0xFF])
-        ndef_with_length.extend(ndef_data)
-        cc_data = self._build_capability_container(len(ndef_with_length))
-
-        # State tracking
-        selected_file = None  # Can be 'CC' or 'NDEF'
+        # Build Type 2 memory layout (starts at page 4)
+        our_memory = self._build_type2_memory(ndef_data)
 
         try:
             # Wait for commands from initiator
             while self.running:
-                # Get data from initiator
+                # Get command from initiator
                 status, data = self.nfc.tgGetData()
 
                 if status <= 0:
                     break
 
-                # Parse APDU command
-                if len(data) < 4:
-                    logging.warning(f"APDU too short: {len(data)} bytes")
+                # Parse command
+                if len(data) < 2:
+                    logging.warning(f"Command too short: {len(data)} bytes")
                     continue
 
-                cla = data[0]
-                ins = data[1]
-                p1 = data[2]
-                p2 = data[3]
+                cmd = data[0]
 
-                # Handle SELECT command (0xA4)
-                if ins == 0xA4:
-                    if p1 == 0x04:  # Select by AID
-                        # Extract AID from command data
-                        if len(data) >= 5:
-                            aid_length = data[4]
-                            if len(data) >= 5 + aid_length:
-                                aid = bytes(data[5:5+aid_length])
-                                if aid == NDEF_AID:
-                                    logging.info("NDEF application selected")
-                                    self.nfc.tgSetData(bytearray([0x90, 0x00]))
-                                else:
-                                    logging.warning(f"Unknown AID: {aid.hex()}")
-                                    self.nfc.tgSetData(bytearray([0x6A, 0x82]))  # File not found
-                            else:
-                                self.nfc.tgSetData(bytearray([0x67, 0x00]))  # Wrong length
-                        else:
-                            self.nfc.tgSetData(bytearray([0x67, 0x00]))  # Wrong length
+                # Handle READ command (0x30)
+                if cmd == 0x30:
+                    page = data[1]
+                    logging.info(f"READ command for page {page}")
 
-                    elif p1 == 0x00:  # Select by file ID
-                        if len(data) >= 5:
-                            file_id_length = data[4]
-                            if len(data) >= 5 + file_id_length:
-                                file_id = bytes(data[5:5+file_id_length])
-                                if file_id == CC_FILE_ID:
-                                    selected_file = 'CC'
-                                    logging.info("CC file selected")
-                                    self.nfc.tgSetData(bytearray([0x90, 0x00]))
-                                elif file_id == NDEF_FILE_ID:
-                                    selected_file = 'NDEF'
-                                    logging.info("NDEF file selected")
-                                    self.nfc.tgSetData(bytearray([0x90, 0x00]))
-                                else:
-                                    logging.warning(f"Unknown file ID: {file_id.hex()}")
-                                    self.nfc.tgSetData(bytearray([0x6A, 0x82]))  # File not found
-                            else:
-                                self.nfc.tgSetData(bytearray([0x67, 0x00]))  # Wrong length
-                        else:
-                            self.nfc.tgSetData(bytearray([0x67, 0x00]))  # Wrong length
+                    # Pages 0-3 are UID/lock bytes (handled by PN532)
+                    # We provide pages 4+ from our memory
+                    if page < 4:
+                        # PN532 should handle these, but respond with zeros if asked
+                        response = bytearray(16)
+                        self.nfc.tgSetData(response)
                     else:
-                        logging.warning(f"Unsupported SELECT P1: {p1:02x}")
-                        self.nfc.tgSetData(bytearray([0x6A, 0x86]))  # Incorrect parameters
+                        # Calculate offset in our memory
+                        # our_memory starts at page 4, so page N maps to offset (N-4)*4
+                        offset = (page - 4) * 4
 
-                # Handle READ BINARY command (0xB0)
-                elif ins == 0xB0:
-                    offset = (p1 << 8) | p2
-                    length = data[4] if len(data) > 4 else 0
+                        if offset < len(our_memory):
+                            # Return 16 bytes (4 pages) starting from this offset
+                            end = min(offset + 16, len(our_memory))
+                            response = bytearray(our_memory[offset:end])
 
-                    if selected_file == 'CC':
-                        # Read from Capability Container
-                        if offset < len(cc_data):
-                            end = min(offset + length, len(cc_data))
-                            response = bytearray(cc_data[offset:end])
-                            response.extend([0x90, 0x00])
+                            # Pad to 16 bytes if needed
+                            while len(response) < 16:
+                                response.append(0x00)
+
                             self.nfc.tgSetData(response)
-                            logging.info(f"Read {len(response)-2} bytes from CC at offset {offset}")
+                            logging.info(f"Returned {len(response)} bytes from page {page}")
                         else:
-                            self.nfc.tgSetData(bytearray([0x6B, 0x00]))  # Wrong offset
-
-                    elif selected_file == 'NDEF':
-                        # Read from NDEF file
-                        if offset < len(ndef_with_length):
-                            end = min(offset + length, len(ndef_with_length))
-                            response = bytearray(ndef_with_length[offset:end])
-                            response.extend([0x90, 0x00])
+                            # Out of bounds, return zeros
+                            response = bytearray(16)
                             self.nfc.tgSetData(response)
-                            logging.info(f"Read {len(response)-2} bytes from NDEF at offset {offset}")
-                        else:
-                            self.nfc.tgSetData(bytearray([0x6B, 0x00]))  # Wrong offset
-
-                    else:
-                        logging.warning("READ BINARY without file selected")
-                        self.nfc.tgSetData(bytearray([0x69, 0x86]))  # Command not allowed
-
+                            logging.warning(f"Page {page} out of bounds, returning zeros")
                 else:
-                    # Unsupported command
-                    logging.warning(f"Unsupported INS: {ins:02x}")
-                    self.nfc.tgSetData(bytearray([0x6D, 0x00]))  # INS not supported
+                    # Unsupported command - respond with zeros
+                    logging.warning(f"Unsupported command: {cmd:02x}")
+                    response = bytearray(16)
+                    self.nfc.tgSetData(response)
 
         except Exception as e:
-            logging.error(f"Error handling Type 4 commands: {e}")
+            logging.error(f"Error handling Type 2 commands: {e}")
 
     def handle_ready(self):
         """Called when Klipper is ready"""
