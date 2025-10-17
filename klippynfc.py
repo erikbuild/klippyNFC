@@ -24,8 +24,7 @@ class NFCEmulator:
         self.name = config.get_name()
 
         # Configuration
-        self.spi_bus = config.getint('spi_bus', 0)
-        self.spi_cs_pin = config.getint('spi_cs_pin', 8)
+        self.i2c_bus = config.getint('i2c_bus', 1)
         self.url_override = config.get('url', None)
         self.port = config.getint('port', 7125)
         self.uid = config.get('uid', '010203')
@@ -114,11 +113,11 @@ class NFCEmulator:
     def _init_pn532(self):
         """Initialize the PN532 hardware"""
         try:
-            from pn532pi import Pn532, Pn532Spi
+            from pn532pi import Pn532, Pn532I2c
 
-            # Initialize SPI interface
-            spi = Pn532Spi(self.spi_cs_pin)
-            self.nfc = Pn532(spi)
+            # Initialize I2C interface
+            i2c = Pn532I2c(self.i2c_bus)
+            self.nfc = Pn532(i2c)
 
             # Begin communication
             self.nfc.begin()
