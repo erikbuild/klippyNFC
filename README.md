@@ -1,12 +1,13 @@
-# KlippyNFC - NFC Tag to Web Interface for Klipper
+# KlippyNFC - NFC Tag Writer for Klipper
 
-A Klipper plugin that uses a PN532 NFC module to emulate an NFC tag presenting your Klipper web interface URL (usually Mainsail). Tap your phone to the NFC module and instantly access your printer's web interface.
+A Klipper plugin that uses a PN532 NFC module to write NFC tags with your Klipper web interface URL (usually Mainsail). Write tags once, then tap your phone to them anytime to instantly access your printer's web interface.
 
 ## Hardware Requirements
 
 - PN532 NFC breakout board
 - Raspberry Pi 4 (or compatible) with SPI enabled
 - External 3.3V or 5V power supply for PN532 (Pi's 3.3V regulator insufficient)
+- Blank NFC tags (Type 2: NTAG213/215/216, MIFARE Ultralight)
 
 ## Installation
 
@@ -73,53 +74,63 @@ sudo systemctl restart klipper
 
 ## Usage
 
+### Writing Tags
+
+1. Place a blank NFC tag on the PN532 reader
+2. Run the write command via G-code console or Mainsail/Fluidd interface:
+```gcode
+NFC_WRITE_TAG
+```
+3. Wait for confirmation message
+4. Remove tag - it's now programmed!
+
 ### G-Code Commands
 
+**NFC_WRITE_TAG**
+Write the current URL to an NFC tag:
+```gcode
+NFC_WRITE_TAG
+```
+Or specify a custom URL:
+```gcode
+NFC_WRITE_TAG URL=http://192.168.1.100:7125
+```
+
 **NFC_STATUS**
-Display current NFC emulation status:
+Display tag writer status:
 ```gcode
 NFC_STATUS
 ```
 Output:
 ```
-NFC Emulation: running
 Current URL: http://printer.local:7125
-Error count: 0
+Last write: Successfully wrote 48 bytes (12 pages)
+Write time: 2025-01-15 14:23:45
 ```
 
 **NFC_SET_URL**
-Change the emulated URL dynamically:
+Change the URL for future tag writes:
 ```gcode
 NFC_SET_URL URL=http://192.168.1.100:7125
 ```
 
-**NFC_RESTART**
-Restart NFC emulation (useful after configuration changes):
-```gcode
-NFC_RESTART
-```
+### Using Written Tags
 
-### Using with Your Phone
-
-1. Ensure NFC is enabled on your phone
-2. Tap your phone to the PN532 module
-3. Your phone should prompt you to open the Klipper web interface URL
-4. Tap to open in your browser
+1. Write a tag using the commands above
+2. Place the tag anywhere convenient (printer enclosure, workbench, etc.)
+3. Tap your phone to the tag anytime
+4. Your phone opens the Klipper web interface automatically
 
 ## Troubleshooting
 
-### iPhone Compatibility
+### Phone Compatibility
 
-**Known Issue:** iPhone NFC reading of PN532 emulated tags is limited and unreliable:
-- Maximum 47 bytes can be transmitted
-- Detection may fail entirely
-- Works better on newer iPhones (XR and later)
+Physical NFC tags written by this plugin work with:
+- ✅ iPhone 7 and later (all models with NFC)
+- ✅ Android phones with NFC enabled
+- ✅ Most modern smartphones
 
-**Workaround:** If iPhone compatibility is critical, consider using the PN532 in reader/writer mode to program a physical NFC sticker instead.
-
-### Android Compatibility
-
-Android devices generally have better compatibility with PN532 card emulation.
+Tags are standard NDEF format and universally compatible.
 
 ### Common Issues
 
@@ -133,6 +144,16 @@ Android devices generally have better compatibility with PN532 card emulation.
 ```bash
 ~/klippy-env/bin/pip install pn532pi
 ```
+
+**"No NFC tag detected"**
+- Ensure tag is Type 2 compatible (NTAG213/215/216 or MIFARE Ultralight)
+- Place tag flat against PN532 antenna
+- Tag may already be locked/protected - try a fresh blank tag
+
+**"Failed to write page X"**
+- Tag may be write-protected
+- Tag memory may be full
+- Try a different tag with more memory (NTAG216 has 888 bytes)
 
 **Random resets or communication failures**
 - PN532 likely underpowered
@@ -155,12 +176,12 @@ tail -f /tmp/klippy.log | grep -i nfc
 
 ## Technical Details
 
-### NFC Tag Emulation
+### NFC Tag Writing
 
-- **Tag Type:** NFC Forum Type 4 Tag
-- **Protocol:** ISO/IEC 14443-4 (ISO-DEP)
+- **Tag Type:** NFC Forum Type 2 Tag (NTAG/MIFARE Ultralight)
+- **Protocol:** ISO/IEC 14443-3 Type A
 - **NDEF Record:** URI Record with URL prefix compression
-- **Mode:** Passive target emulation
+- **Write Method:** Page-by-page writing starting at page 4
 
 ### URL Discovery
 
@@ -170,22 +191,23 @@ The plugin automatically discovers the web interface URL:
 3. Uses configured port (default: 7125 for Moonraker)
 4. Can be overridden with `url` config parameter
 
-### Thread Safety
+### Operation
 
-NFC emulation runs in a daemon background thread, preventing blocking of Klipper's main event loop.
+Tag writing is synchronous and blocks during the write operation (typically 1-2 seconds). The PN532 is initialized once at startup and ready to write tags on demand via G-code commands.
 
 ## Limitations
 
-- iPhone compatibility limited (47-byte max, unreliable)
-- Type 4 tag protocol simplified (may not work with all readers)
+- Requires blank Type 2 NFC tags (NTAG or MIFARE Ultralight)
+- Tags must be purchased separately
 - Requires external power for PN532
+- Write operation blocks G-code execution for 1-2 seconds
 
 ## Future Enhancements
 
-- Support for physical NFC tag writing mode
-- Material tracking with NFC tags
+- Bulk tag writing for multiple printers
+- Material/filament tracking with NFC tags
 - Access control via NFC authentication
-- Multi-URL profiles (e.g., Mainsail, Fluidd, Moonraker)
+- QR code generation alongside NFC tags
 
 ## License
 

@@ -1,19 +1,18 @@
 ################################################################################
 #                                                                              #
-#  klippyNFC - NFC Tag Emulation for Klipper                                   #
+#  klippyNFC - NFC Tag Writer for Klipper                                      #
 #                                                                              #
 #  Author: Erik Reynolds (erikbuild)                                           #
 #  Repository: https://github.com/erikbuild/klippyNFC                          #
 #                                                                              #
-#  Emulates an NFC tag using PN532 hardware that presents the Klipper          #
+#  Writes NFC tags using PN532 hardware that present the Klipper               #
 #  web interface URL when tapped by a phone.                                   #
 #                                                                              #
 ################################################################################
 
-# ABOUTME: Klipper plugin for PN532 NFC tag emulation
-# ABOUTME: Emulates an NFC tag presenting the Klipper web interface URL
+# ABOUTME: Klipper plugin for PN532 NFC tag writing
+# ABOUTME: Writes NFC tags with the Klipper web interface URL
 
-import threading
 import socket
 import logging
 import time
@@ -28,27 +27,24 @@ class KlippyNFC:
         self.spi_ce = config.getint('spi_ce', 0)  # 0=CE0 (GPIO8), 1=CE1 (GPIO7)
         self.url_override = config.get('url', None)
         self.port = config.getint('port', 80)
-        self.uid = config.get('uid', '010203')
 
         # State
         self.nfc = None
-        self.emulation_thread = None
-        self.running = False
         self.current_url = None
-        self.error_count = 0
+        self.last_write_status = "Not written yet"
+        self.last_write_time = None
 
         # Register event handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
-        self.printer.register_event_handler("klippy:disconnect", self.handle_disconnect)
 
         # Register G-code commands
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command('NFC_STATUS', self.cmd_NFC_STATUS,
                              desc=self.cmd_NFC_STATUS_help)
+        gcode.register_command('NFC_WRITE_TAG', self.cmd_NFC_WRITE_TAG,
+                             desc=self.cmd_NFC_WRITE_TAG_help)
         gcode.register_command('NFC_SET_URL', self.cmd_NFC_SET_URL,
                              desc=self.cmd_NFC_SET_URL_help)
-        gcode.register_command('NFC_RESTART', self.cmd_NFC_RESTART,
-                             desc=self.cmd_NFC_RESTART_help)
 
     def _get_url(self):
         """Discover or construct the web interface URL"""
@@ -188,193 +184,138 @@ class KlippyNFC:
             logging.error(f"Failed to initialize PN532: {e}")
             return False
 
-    def _emulation_loop(self):
-        """Main emulation loop running in background thread"""
-        logging.info(f"Starting NFC emulation for URL: {self.current_url}")
+    def _scan_for_tag(self, timeout_ms=2000):
+        """Scan for a Type 2 NFC tag (NTAG, Ultralight, etc.)
 
-        while self.running:
-            try:
-                # Build NDEF message with current URL
-                ndef_data = self._build_ndef_uri_record(self.current_url)
-
-                # Convert UID string to bytes
-                uid_bytes = bytes.fromhex(self.uid)
-
-                # Configure target parameters for Type 4 tag emulation
-                # Mode: Passive only (0x01)
-                mode = 0x01
-
-                # SENS_RES (ISO14443A) - 0x4400 indicates Type 2 tag (NTAG/Ultralight)
-                sens_res = bytes([0x44, 0x00])
-
-                # SEL_RES for Type 2 (no ISO14443-4)
-                sel_res = 0x00
-
-                # Build command buffer for tgInitAsTarget
-                # Format: 0x8C + MODE + MIFARE params (6) + FELICA params (18) + NFCID3t (10)
-                command = bytearray([0x8C, mode])  # 0x8C = TgInitAsTarget command
-                # MIFARE parameters (6 bytes total)
-                command.extend(sens_res)           # SENS_RES (2 bytes)
-                command.extend(uid_bytes)          # NFCID1t/UID (3 bytes)
-                command.append(sel_res)            # SEL_RES (1 byte)
-                # Felica parameters (18 bytes) - not used for Type 4
-                command.extend(bytes(18))
-                # NFCID3t (10 bytes) - required by PN532
-                command.extend(bytes(10))
-
-                # Debug: Log command buffer
-                logging.info(f"Calling tgInitAsTarget with command ({len(command)} bytes): {command.hex()}")
-
-                # Initialize as target
-                success = self.nfc.tgInitAsTarget(command, 1000)
-
-                # Debug: Log result
-                logging.info(f"tgInitAsTarget returned: {success}")
-
-                if success <= 0:
-                    # No activation or timeout, continue loop
-                    logging.debug("No target activation, continuing...")
-                    time.sleep(0.1)
-                    continue
-
-                logging.info("NFC target activated")
-
-                # Handle Type 2 tag memory commands
-                self._handle_type2_commands(ndef_data)
-
-                # Reset error count on successful interaction
-                self.error_count = 0
-
-            except Exception as e:
-                self.error_count += 1
-                logging.error(f"NFC emulation error: {e}")
-
-                if self.error_count > 10:
-                    logging.error("Too many errors, stopping NFC emulation")
-                    self.running = False
-                    break
-
-                time.sleep(1)
-
-    def _handle_type2_commands(self, ndef_data):
-        """Handle Type 2 tag memory READ commands
-
-        Type 2 tags use simple memory-based protocol:
-        - READ command (0x30 + page): Returns 16 bytes (4 pages)
-        - Memory layout: Pages 0-3 (UID/locks by PN532), Pages 4+ (our data)
+        Returns (success, uid) tuple where:
+        - success: True if tag detected
+        - uid: Tag UID as bytes, or None if no tag
         """
-        # Build Type 2 memory layout (starts at page 4)
-        our_memory = self._build_type2_memory(ndef_data)
-
         try:
-            # Wait for commands from initiator
-            while self.running:
-                # Get command from initiator
-                status, data = self.nfc.tgGetData()
+            # Read passive target (Type A, 106 kbps)
+            # cardbaudrate = 0 for Type A tags
+            uid = self.nfc.readPassiveTargetID(timeout=timeout_ms)
 
-                if status <= 0:
-                    break
-
-                # Parse command
-                if len(data) < 2:
-                    logging.warning(f"Command too short: {len(data)} bytes")
-                    continue
-
-                cmd = data[0]
-
-                # Handle READ command (0x30)
-                if cmd == 0x30:
-                    page = data[1]
-                    logging.info(f"READ command for page {page}")
-
-                    # Pages 0-3 are UID/lock bytes (handled by PN532)
-                    # We provide pages 4+ from our memory
-                    if page < 4:
-                        # PN532 should handle these, but respond with zeros if asked
-                        response = bytearray(16)
-                        self.nfc.tgSetData(response)
-                    else:
-                        # Calculate offset in our memory
-                        # our_memory starts at page 4, so page N maps to offset (N-4)*4
-                        offset = (page - 4) * 4
-
-                        if offset < len(our_memory):
-                            # Return 16 bytes (4 pages) starting from this offset
-                            end = min(offset + 16, len(our_memory))
-                            response = bytearray(our_memory[offset:end])
-
-                            # Pad to 16 bytes if needed
-                            while len(response) < 16:
-                                response.append(0x00)
-
-                            self.nfc.tgSetData(response)
-                            logging.info(f"Returned {len(response)} bytes from page {page}")
-                        else:
-                            # Out of bounds, return zeros
-                            response = bytearray(16)
-                            self.nfc.tgSetData(response)
-                            logging.warning(f"Page {page} out of bounds, returning zeros")
-                else:
-                    # Unsupported command - respond with zeros
-                    logging.warning(f"Unsupported command: {cmd:02x}")
-                    response = bytearray(16)
-                    self.nfc.tgSetData(response)
+            if uid and len(uid) > 0:
+                logging.info(f"Tag detected: UID = {uid.hex()}")
+                return True, uid
+            else:
+                return False, None
 
         except Exception as e:
-            logging.error(f"Error handling Type 2 commands: {e}")
+            logging.error(f"Error scanning for tag: {e}")
+            return False, None
+
+    def _write_tag(self, url):
+        """Write NDEF URL message to a Type 2 NFC tag
+
+        Returns (success, message) tuple
+        """
+        try:
+            # Build NDEF message
+            ndef_data = self._build_ndef_uri_record(url)
+            memory = self._build_type2_memory(ndef_data)
+
+            logging.info(f"Writing {len(memory)} bytes to tag")
+
+            # Write memory to tag, starting at page 4
+            # (Pages 0-3 contain UID and are readonly)
+            page = 4
+            offset = 0
+
+            while offset < len(memory):
+                # Get 4 bytes for this page
+                page_data = memory[offset:offset+4]
+
+                # Pad to 4 bytes if needed
+                while len(page_data) < 4:
+                    page_data += b'\x00'
+
+                # Write page using ntag2xx_WritePage
+                success = self.nfc.ntag2xx_WritePage(page, list(page_data))
+
+                if not success:
+                    error_msg = f"Failed to write page {page}"
+                    logging.error(error_msg)
+                    return False, error_msg
+
+                logging.info(f"Wrote page {page}: {page_data.hex()}")
+
+                page += 1
+                offset += 4
+
+            success_msg = f"Successfully wrote {len(memory)} bytes ({(len(memory)+3)//4} pages)"
+            logging.info(success_msg)
+            return True, success_msg
+
+        except Exception as e:
+            error_msg = f"Error writing tag: {e}"
+            logging.error(error_msg)
+            return False, error_msg
 
     def handle_ready(self):
         """Called when Klipper is ready"""
         self.current_url = self._get_url()
 
         if not self._init_pn532():
-            logging.error("Failed to initialize PN532, NFC emulation disabled")
+            logging.error("Failed to initialize PN532, NFC tag writing disabled")
             return
 
-        # Start emulation thread
-        self.running = True
-        self.emulation_thread = threading.Thread(target=self._emulation_loop)
-        self.emulation_thread.daemon = True
-        self.emulation_thread.start()
-
-        logging.info(f"NFC emulation started: {self.current_url}")
-
-    def handle_disconnect(self):
-        """Called when Klipper disconnects"""
-        self.running = False
-        if self.emulation_thread:
-            self.emulation_thread.join(timeout=2)
+        logging.info(f"NFC tag writer ready. Use NFC_WRITE_TAG to write tags with URL: {self.current_url}")
 
     # G-code command handlers
-    cmd_NFC_STATUS_help = "Display NFC emulation status and current URL"
+    cmd_NFC_STATUS_help = "Display NFC tag writer status and current URL"
     def cmd_NFC_STATUS(self, gcmd):
         gcode = self.printer.lookup_object('gcode')
 
-        status = "running" if self.running else "stopped"
-        gcode.respond_info(f"NFC Emulation: {status}")
         gcode.respond_info(f"Current URL: {self.current_url}")
-        gcode.respond_info(f"Error count: {self.error_count}")
+        gcode.respond_info(f"Last write: {self.last_write_status}")
+        if self.last_write_time:
+            gcode.respond_info(f"Write time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.last_write_time))}")
 
-    cmd_NFC_SET_URL_help = "Set a custom URL for NFC emulation"
+    cmd_NFC_WRITE_TAG_help = "Write current URL to an NFC tag (place tag on reader first)"
+    def cmd_NFC_WRITE_TAG(self, gcmd):
+        gcode = self.printer.lookup_object('gcode')
+
+        if not self.nfc:
+            gcode.respond_info("Error: PN532 not initialized")
+            return
+
+        # Use URL parameter if provided, otherwise use current URL
+        url = gcmd.get('URL', self.current_url)
+
+        gcode.respond_info(f"Scanning for NFC tag...")
+
+        # Scan for tag
+        success, uid = self._scan_for_tag(timeout_ms=5000)
+
+        if not success:
+            self.last_write_status = "Failed: No tag detected"
+            self.last_write_time = time.time()
+            gcode.respond_info("Error: No NFC tag detected. Place tag on reader and try again.")
+            return
+
+        gcode.respond_info(f"Tag detected: {uid.hex()}")
+        gcode.respond_info(f"Writing URL: {url}")
+
+        # Write to tag
+        success, message = self._write_tag(url)
+
+        self.last_write_status = message
+        self.last_write_time = time.time()
+
+        if success:
+            gcode.respond_info(f"Success! {message}")
+        else:
+            gcode.respond_info(f"Error: {message}")
+
+    cmd_NFC_SET_URL_help = "Set a custom URL for NFC tag writing"
     def cmd_NFC_SET_URL(self, gcmd):
         url = gcmd.get('URL')
         self.current_url = url
 
         gcode = self.printer.lookup_object('gcode')
         gcode.respond_info(f"NFC URL updated to: {url}")
-
-    cmd_NFC_RESTART_help = "Restart NFC emulation"
-    def cmd_NFC_RESTART(self, gcmd):
-        gcode = self.printer.lookup_object('gcode')
-
-        # Stop current emulation
-        self.running = False
-        if self.emulation_thread:
-            self.emulation_thread.join(timeout=2)
-
-        # Restart
-        self.handle_ready()
-        gcode.respond_info("NFC emulation restarted")
 
 def load_config(config):
     return KlippyNFC(config)
