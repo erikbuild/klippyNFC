@@ -334,6 +334,68 @@ NFC URL updated to: http://192.168.1.100:7125
 - Change persists until Klipper restart (reverts to config/auto-detected URL)
 - Use this for writing multiple tags with different URLs
 
+#### NFC_READ_TAG
+
+Read and display full tag details.
+
+**Usage:**
+```gcode
+NFC_READ_TAG
+```
+
+**Output:**
+```
+=== Tag Details ===
+UID: 046da0cd2e6180
+URL: http://printer.local:80
+Tag Version: 1.0
+Memory Size: 496 bytes
+NDEF Length: 26 bytes
+NDEF Data: d10116550374686f...
+```
+
+#### NFC_VERIFY_TAG
+
+Verify that a tag contains the expected URL.
+
+**Usage:**
+```gcode
+NFC_VERIFY_TAG                          # Verify against current URL
+NFC_VERIFY_TAG URL=http://test.local:80 # Verify against specific URL
+```
+
+**Output:**
+```
+SUCCESS: Tag URL matches expected URL
+```
+
+Or if mismatch:
+```
+MISMATCH: Tag contains different URL
+  Expected: http://printer.local:80
+  Actual:   http://oldprinter.local:7125
+```
+
+#### NFC_TAG_INFO
+
+Display tag hardware information.
+
+**Usage:**
+```gcode
+NFC_TAG_INFO
+```
+
+**Output:**
+```
+=== Tag Information ===
+UID: 046da0cd2e6180
+Tag Type: NTAG or MIFARE Ultralight (7-byte UID)
+Format: NDEF (Type 2 Tag)
+Memory Capacity: 496 bytes
+Read Access: Allowed
+Write Access: Allowed
+```
+
 ## Troubleshooting
 
 ### Phone Compatibility
