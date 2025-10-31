@@ -1,17 +1,17 @@
 ################################################################################
 #                                                                              #
-#  klippyNFC - NFC Tag Writer for Klipper                                      #
+#  klippyNFC - NFC Tag Reader/Writer for Klipper                               #
 #                                                                              #
 #  Author: Erik Reynolds (erikbuild)                                           #
 #  Repository: https://github.com/erikbuild/klippyNFC                          #
 #                                                                              #
-#  Writes NFC tags using PN532 hardware that present the Klipper               #
-#  web interface URL when tapped by a phone.                                   #
+#  Reads and writes NFC tags using PN532 hardware. Written tags present        #
+#  the Klipper web interface URL when tapped by a phone.                       #
 #                                                                              #
 ################################################################################
 
-# ABOUTME: Klipper plugin for PN532 NFC tag writing
-# ABOUTME: Writes NFC tags with the Klipper web interface URL
+# ABOUTME: Klipper plugin for PN532 NFC tag reading and writing
+# ABOUTME: Reads and writes NFC tags with the Klipper web interface URL
 
 import socket
 import logging
@@ -45,6 +45,12 @@ class KlippyNFC:
                              desc=self.cmd_NFC_WRITE_TAG_help)
         gcode.register_command('NFC_SET_URL', self.cmd_NFC_SET_URL,
                              desc=self.cmd_NFC_SET_URL_help)
+        gcode.register_command('NFC_READ_TAG', self.cmd_NFC_READ_TAG,
+                             desc=self.cmd_NFC_READ_TAG_help)
+        gcode.register_command('NFC_VERIFY_TAG', self.cmd_NFC_VERIFY_TAG,
+                             desc=self.cmd_NFC_VERIFY_TAG_help)
+        gcode.register_command('NFC_TAG_INFO', self.cmd_NFC_TAG_INFO,
+                             desc=self.cmd_NFC_TAG_INFO_help)
 
     def _get_url(self):
         """Discover or construct the web interface URL"""
@@ -114,6 +120,68 @@ class KlippyNFC:
 
         return bytes(ndef_message)
 
+    def _parse_ndef_uri_record(self, ndef_bytes):
+        """Parse an NDEF URI record to extract the URL
+
+        Args:
+            ndef_bytes: Raw NDEF message bytes
+
+        Returns:
+            Tuple of (success, url) where:
+            - success: True if valid URI record parsed
+            - url: Extracted URL string, or None if invalid
+        """
+        try:
+            if len(ndef_bytes) < 5:
+                logging.error(f"NDEF message too short: {len(ndef_bytes)} bytes")
+                return False, None
+
+            # Parse NDEF record header
+            tnf_flags = ndef_bytes[0]
+            type_length = ndef_bytes[1]
+            payload_length = ndef_bytes[2]
+            record_type = ndef_bytes[3]
+
+            # Validate TNF (should be 0x01 = Well Known)
+            tnf = tnf_flags & 0x07
+            if tnf != 0x01:
+                logging.error(f"Invalid TNF: {tnf:#x}, expected 0x01 (Well Known)")
+                return False, None
+
+            # Validate record type (should be 'U' for URI)
+            if record_type != ord('U'):
+                logging.error(f"Invalid record type: {record_type:#x}, expected 'U' (0x55)")
+                return False, None
+
+            # Extract URI code and data
+            if len(ndef_bytes) < 5 + payload_length:
+                logging.error(f"NDEF payload truncated: expected {5 + payload_length}, got {len(ndef_bytes)}")
+                return False, None
+
+            uri_code = ndef_bytes[4]
+            uri_data = ndef_bytes[5:5 + payload_length - 1].decode('utf-8')
+
+            # Decompress URI prefix
+            uri_prefixes = {
+                0x00: '',
+                0x01: 'http://www.',
+                0x02: 'https://www.',
+                0x03: 'http://',
+                0x04: 'https://',
+            }
+
+            prefix = uri_prefixes.get(uri_code, '')
+            if uri_code not in uri_prefixes:
+                logging.warning(f"Unknown URI code: {uri_code:#x}, treating as no prefix")
+
+            url = prefix + uri_data
+            logging.info(f"Parsed NDEF URI: {url}")
+            return True, url
+
+        except Exception as e:
+            logging.error(f"Error parsing NDEF URI record: {e}")
+            return False, None
+
     def _build_type2_memory(self, ndef_data):
         """Build Type 2 tag memory layout
 
@@ -159,6 +227,119 @@ class KlippyNFC:
             tlv_bytes.append(0x00)
 
         return bytes(cc_bytes), bytes(tlv_bytes)
+
+    def _parse_type2_memory(self, cc_bytes, tlv_bytes):
+        """Parse Type 2 tag memory layout to extract NDEF message
+
+        Args:
+            cc_bytes: 4 bytes from page 3 (Capability Container)
+            tlv_bytes: TLV data from page 4+ until terminator
+
+        Returns:
+            Tuple of (success, ndef_data, metadata) where:
+            - success: True if valid NDEF structure
+            - ndef_data: Raw NDEF message bytes, or None if invalid
+            - metadata: Dictionary with CC info (magic, version, size, access)
+        """
+        try:
+            # Parse Capability Container
+            if len(cc_bytes) < 4:
+                logging.error(f"CC too short: {len(cc_bytes)} bytes")
+                return False, None, None
+
+            cc_magic = cc_bytes[0]
+            cc_version = cc_bytes[1]
+            cc_size = cc_bytes[2]
+            cc_access = cc_bytes[3]
+
+            # Validate NDEF magic number
+            if cc_magic != 0xE1:
+                logging.error(f"Invalid CC magic number: {cc_magic:#x}, expected 0xE1")
+                return False, None, None
+
+            # Build metadata
+            metadata = {
+                'magic': cc_magic,
+                'version_major': (cc_version >> 4) & 0x0F,
+                'version_minor': cc_version & 0x0F,
+                'memory_size': cc_size * 8,  # Size is in units of 8 bytes
+                'read_access': (cc_access >> 4) & 0x0F,
+                'write_access': cc_access & 0x0F,
+            }
+
+            logging.info(f"CC: version={metadata['version_major']}.{metadata['version_minor']}, "
+                        f"size={metadata['memory_size']} bytes, "
+                        f"access=R{metadata['read_access']:#x}/W{metadata['write_access']:#x}")
+
+            # Parse TLV structure
+            if len(tlv_bytes) < 2:
+                logging.error(f"TLV too short: {len(tlv_bytes)} bytes")
+                return False, None, metadata
+
+            offset = 0
+            ndef_data = None
+
+            while offset < len(tlv_bytes):
+                tlv_type = tlv_bytes[offset]
+                offset += 1
+
+                # Terminator TLV
+                if tlv_type == 0xFE:
+                    logging.info("Found Terminator TLV")
+                    break
+
+                # Null TLV (skip)
+                if tlv_type == 0x00:
+                    continue
+
+                # NDEF Message TLV
+                if tlv_type == 0x03:
+                    if offset >= len(tlv_bytes):
+                        logging.error("TLV length missing")
+                        return False, None, metadata
+
+                    # Parse length (1 or 3 bytes)
+                    length_byte = tlv_bytes[offset]
+                    offset += 1
+
+                    if length_byte == 0xFF:
+                        # 3-byte length format
+                        if offset + 2 > len(tlv_bytes):
+                            logging.error("TLV 3-byte length truncated")
+                            return False, None, metadata
+                        ndef_length = (tlv_bytes[offset] << 8) | tlv_bytes[offset + 1]
+                        offset += 2
+                    else:
+                        # 1-byte length format
+                        ndef_length = length_byte
+
+                    # Extract NDEF message
+                    if offset + ndef_length > len(tlv_bytes):
+                        logging.error(f"NDEF message truncated: expected {ndef_length}, "
+                                    f"got {len(tlv_bytes) - offset}")
+                        return False, None, metadata
+
+                    ndef_data = tlv_bytes[offset:offset + ndef_length]
+                    offset += ndef_length
+
+                    logging.info(f"Extracted NDEF message: {ndef_length} bytes")
+                    break
+                else:
+                    logging.warning(f"Unknown TLV type: {tlv_type:#x}, skipping")
+                    # Try to skip this TLV block
+                    if offset < len(tlv_bytes):
+                        skip_length = tlv_bytes[offset]
+                        offset += 1 + skip_length
+
+            if ndef_data is None:
+                logging.error("No NDEF Message TLV found")
+                return False, None, metadata
+
+            return True, bytes(ndef_data), metadata
+
+        except Exception as e:
+            logging.error(f"Error parsing Type 2 memory: {e}")
+            return False, None, None
 
     def _init_pn532(self):
         """Initialize the PN532 hardware"""
@@ -225,6 +406,87 @@ class KlippyNFC:
             logging.error(f"Error scanning for tag: {e}")
             return False, None
 
+    def _read_pages(self, start_page, count):
+        """Read multiple consecutive pages from tag
+
+        Args:
+            start_page: First page number to read
+            count: Number of pages to read (each page is 4 bytes)
+
+        Returns:
+            Tuple of (success, pages_data) where:
+            - success: True if all pages read successfully
+            - pages_data: bytes containing all page data concatenated, or None if failed
+        """
+        try:
+            pages_data = bytearray()
+
+            for page in range(start_page, start_page + count):
+                # mifareultralight_ReadPage returns (success, 4-byte page data)
+                success = self.nfc.mifareultralight_ReadPage(page, pages_data)
+
+                if not success:
+                    logging.error(f"Failed to read page {page}")
+                    return False, None
+
+                logging.debug(f"Read page {page}: {pages_data[-4:].hex()}")
+
+            logging.info(f"Read {count} pages ({len(pages_data)} bytes) starting from page {start_page}")
+            return True, bytes(pages_data)
+
+        except Exception as e:
+            logging.error(f"Error reading pages: {e}")
+            return False, None
+
+    def _write_pages(self, start_page, data):
+        """Write data to consecutive pages starting at start_page
+
+        Args:
+            start_page: First page number to write
+            data: bytes to write (will be padded to 4-byte boundary)
+
+        Returns:
+            Tuple of (success, message) where:
+            - success: True if all pages written successfully
+            - message: Status message
+        """
+        try:
+            # Pad to 4-byte boundary
+            write_data = bytearray(data)
+            while len(write_data) % 4 != 0:
+                write_data.append(0x00)
+
+            page = start_page
+            offset = 0
+            pages_written = 0
+
+            while offset < len(write_data):
+                # Get 4 bytes for this page
+                page_data = write_data[offset:offset+4]
+
+                # Write page
+                success = self.nfc.mifareultralight_WritePage(page, page_data)
+
+                if not success:
+                    error_msg = f"Failed to write page {page}"
+                    logging.error(error_msg)
+                    return False, error_msg
+
+                logging.debug(f"Wrote page {page}: {page_data.hex()}")
+
+                page += 1
+                offset += 4
+                pages_written += 1
+
+            success_msg = f"Wrote {len(data)} bytes ({pages_written} pages) starting at page {start_page}"
+            logging.info(success_msg)
+            return True, success_msg
+
+        except Exception as e:
+            error_msg = f"Error writing pages: {e}"
+            logging.error(error_msg)
+            return False, error_msg
+
     def _write_tag(self, url):
         """Write NDEF URL message to a Type 2 NFC tag
 
@@ -239,39 +501,22 @@ class KlippyNFC:
             logging.info(f"Writing {total_bytes} bytes to tag (CC: {len(cc_bytes)}, TLV: {len(tlv_bytes)})")
 
             # Write Capability Container to page 3
-            success = self.nfc.mifareultralight_WritePage(3, bytearray(cc_bytes))
+            success, message = self._write_pages(3, cc_bytes)
             if not success:
-                error_msg = "Failed to write Capability Container (page 3)"
+                error_msg = f"Failed to write Capability Container: {message}"
                 logging.error(error_msg)
                 return False, error_msg
-            logging.info(f"Wrote page 3 (CC): {cc_bytes.hex()}")
+            logging.info(f"Wrote CC to page 3: {cc_bytes.hex()}")
 
             # Write TLV data starting at page 4
-            page = 4
-            offset = 0
+            success, message = self._write_pages(4, tlv_bytes)
+            if not success:
+                error_msg = f"Failed to write TLV data: {message}"
+                logging.error(error_msg)
+                return False, error_msg
 
-            while offset < len(tlv_bytes):
-                # Get 4 bytes for this page
-                page_data = tlv_bytes[offset:offset+4]
-
-                # Pad to 4 bytes if needed
-                while len(page_data) < 4:
-                    page_data += b'\x00'
-
-                # Write page using mifareultralight_WritePage (NTAG uses same command)
-                success = self.nfc.mifareultralight_WritePage(page, bytearray(page_data))
-
-                if not success:
-                    error_msg = f"Failed to write page {page}"
-                    logging.error(error_msg)
-                    return False, error_msg
-
-                logging.info(f"Wrote page {page}: {page_data.hex()}")
-
-                page += 1
-                offset += 4
-
-            success_msg = f"Successfully wrote {total_bytes} bytes (1 CC page + {(len(tlv_bytes)+3)//4} TLV pages)"
+            tlv_pages = (len(tlv_bytes) + 3) // 4
+            success_msg = f"Successfully wrote {total_bytes} bytes (1 CC page + {tlv_pages} TLV pages)"
             logging.info(success_msg)
             return True, success_msg
 
@@ -279,6 +524,96 @@ class KlippyNFC:
             error_msg = f"Error writing tag: {e}"
             logging.error(error_msg)
             return False, error_msg
+
+    def _read_tag(self):
+        """Read and parse NDEF URL from a Type 2 NFC tag
+
+        Returns:
+            Tuple of (success, url, raw_ndef, metadata, uid) where:
+            - success: True if tag read and parsed successfully
+            - url: Extracted URL string, or None if failed
+            - raw_ndef: Raw NDEF message bytes, or None if failed
+            - metadata: Dictionary with CC info, or None if failed
+            - uid: Tag UID as bytes, or None if failed
+        """
+        try:
+            # We need to estimate how many pages to read
+            # NTAG213 has 45 pages total (pages 0-44)
+            # Pages 0-2: UID and internal
+            # Page 3: CC (4 bytes)
+            # Pages 4+: TLV data
+            # We'll read up to page 40 to be safe (allows ~148 bytes of TLV data)
+
+            # Read CC from page 3
+            success, cc_data = self._read_pages(3, 1)
+            if not success:
+                logging.error("Failed to read Capability Container")
+                return False, None, None, None, None
+
+            logging.info(f"Read CC: {cc_data.hex()}")
+
+            # Read TLV data starting from page 4
+            # For safety, read enough pages to cover most NDEF messages
+            # NTAG213 has room for ~130 bytes of TLV data (pages 4-36)
+            success, tlv_data = self._read_pages(4, 33)
+            if not success:
+                logging.error("Failed to read TLV data")
+                return False, None, None, None, None
+
+            # Parse Type 2 memory layout
+            success, ndef_data, metadata = self._parse_type2_memory(cc_data, tlv_data)
+            if not success:
+                logging.error("Failed to parse Type 2 memory layout")
+                return False, None, None, metadata, None
+
+            # Parse NDEF URI record
+            success, url = self._parse_ndef_uri_record(ndef_data)
+            if not success:
+                logging.error("Failed to parse NDEF URI record")
+                return False, None, ndef_data, metadata, None
+
+            # Get UID from last scan (should be available from readPassiveTargetID)
+            # Note: UID is already logged by _scan_for_tag, we just return None here
+            # since the PN532 API doesn't provide a way to retrieve it after scanning
+
+            logging.info(f"Successfully read tag with URL: {url}")
+            return True, url, ndef_data, metadata, None
+
+        except Exception as e:
+            logging.error(f"Error reading tag: {e}")
+            return False, None, None, None, None
+
+    def _verify_tag(self, expected_url):
+        """Verify that a tag contains the expected URL
+
+        Args:
+            expected_url: URL string to verify against
+
+        Returns:
+            Tuple of (success, match, actual_url) where:
+            - success: True if tag read successfully
+            - match: True if URL matches expected_url
+            - actual_url: URL read from tag, or None if read failed
+        """
+        try:
+            success, url, _, _, _ = self._read_tag()
+
+            if not success:
+                logging.error("Failed to read tag for verification")
+                return False, False, None
+
+            match = (url == expected_url)
+
+            if match:
+                logging.info(f"Tag verification SUCCESS: URL matches '{expected_url}'")
+            else:
+                logging.warning(f"Tag verification FAILED: expected '{expected_url}', got '{url}'")
+
+            return True, match, url
+
+        except Exception as e:
+            logging.error(f"Error verifying tag: {e}")
+            return False, False, None
 
     def handle_ready(self):
         """Called when Klipper is ready"""
@@ -343,6 +678,161 @@ class KlippyNFC:
 
         gcode = self.printer.lookup_object('gcode')
         gcode.respond_info(f"NFC URL updated to: {url}")
+
+    cmd_NFC_READ_TAG_help = "Read and display full details from an NFC tag"
+    def cmd_NFC_READ_TAG(self, gcmd):
+        gcode = self.printer.lookup_object('gcode')
+
+        if not self.nfc:
+            gcode.respond_info("Error: PN532 not initialized")
+            return
+
+        gcode.respond_info("Scanning for NFC tag...")
+
+        # Scan for tag
+        success, uid = self._scan_for_tag(timeout_ms=5000)
+
+        if not success:
+            gcode.respond_info("Error: No NFC tag detected. Place tag on reader and try again.")
+            return
+
+        gcode.respond_info(f"Tag detected: {uid.hex()}")
+        gcode.respond_info("Reading tag...")
+
+        # Read tag
+        success, url, raw_ndef, metadata, _ = self._read_tag()
+
+        if not success:
+            gcode.respond_info("Error: Failed to read tag data")
+            return
+
+        # Display full tag details
+        gcode.respond_info("=== Tag Details ===")
+        gcode.respond_info(f"UID: {uid.hex()}")
+        gcode.respond_info(f"URL: {url}")
+
+        if metadata:
+            gcode.respond_info(f"Tag Version: {metadata['version_major']}.{metadata['version_minor']}")
+            gcode.respond_info(f"Memory Size: {metadata['memory_size']} bytes")
+            access_r = metadata['read_access']
+            access_w = metadata['write_access']
+            gcode.respond_info(f"Access: Read={access_r:#x}, Write={access_w:#x}")
+
+        if raw_ndef:
+            gcode.respond_info(f"NDEF Length: {len(raw_ndef)} bytes")
+            gcode.respond_info(f"NDEF Data: {raw_ndef.hex()}")
+
+        gcode.respond_info("===================")
+
+    cmd_NFC_VERIFY_TAG_help = "Verify that a tag contains the expected URL"
+    def cmd_NFC_VERIFY_TAG(self, gcmd):
+        gcode = self.printer.lookup_object('gcode')
+
+        if not self.nfc:
+            gcode.respond_info("Error: PN532 not initialized")
+            return
+
+        # Use URL parameter if provided, otherwise use current URL
+        expected_url = gcmd.get('URL', self.current_url)
+
+        gcode.respond_info("Scanning for NFC tag...")
+
+        # Scan for tag
+        success, uid = self._scan_for_tag(timeout_ms=5000)
+
+        if not success:
+            gcode.respond_info("Error: No NFC tag detected. Place tag on reader and try again.")
+            return
+
+        gcode.respond_info(f"Tag detected: {uid.hex()}")
+        gcode.respond_info(f"Verifying against expected URL: {expected_url}")
+
+        # Verify tag
+        success, match, actual_url = self._verify_tag(expected_url)
+
+        if not success:
+            gcode.respond_info("Error: Failed to read tag for verification")
+            return
+
+        if match:
+            gcode.respond_info(f"SUCCESS: Tag URL matches expected URL")
+        else:
+            gcode.respond_info(f"MISMATCH: Tag contains different URL")
+            gcode.respond_info(f"  Expected: {expected_url}")
+            gcode.respond_info(f"  Actual:   {actual_url}")
+
+    cmd_NFC_TAG_INFO_help = "Display tag information (UID, type, memory, protection)"
+    def cmd_NFC_TAG_INFO(self, gcmd):
+        gcode = self.printer.lookup_object('gcode')
+
+        if not self.nfc:
+            gcode.respond_info("Error: PN532 not initialized")
+            return
+
+        gcode.respond_info("Scanning for NFC tag...")
+
+        # Scan for tag
+        success, uid = self._scan_for_tag(timeout_ms=5000)
+
+        if not success:
+            gcode.respond_info("Error: No NFC tag detected. Place tag on reader and try again.")
+            return
+
+        gcode.respond_info("=== Tag Information ===")
+        gcode.respond_info(f"UID: {uid.hex()}")
+        gcode.respond_info(f"UID Length: {len(uid)} bytes")
+
+        # Determine tag type based on UID length
+        if len(uid) == 4:
+            tag_type = "MIFARE Classic or Ultralight"
+        elif len(uid) == 7:
+            tag_type = "NTAG or MIFARE Ultralight (7-byte UID)"
+        elif len(uid) == 10:
+            tag_type = "MIFARE DESFire or Plus"
+        else:
+            tag_type = "Unknown"
+
+        gcode.respond_info(f"Tag Type: {tag_type}")
+
+        # Try to read CC to get more info
+        success, cc_data = self._read_pages(3, 1)
+        if success:
+            cc_magic = cc_data[0]
+            cc_version = cc_data[1]
+            cc_size = cc_data[2]
+            cc_access = cc_data[3]
+
+            if cc_magic == 0xE1:
+                gcode.respond_info("Format: NDEF (Type 2 Tag)")
+                version_major = (cc_version >> 4) & 0x0F
+                version_minor = cc_version & 0x0F
+                gcode.respond_info(f"NDEF Version: {version_major}.{version_minor}")
+                gcode.respond_info(f"Memory Capacity: {cc_size * 8} bytes")
+
+                read_access = (cc_access >> 4) & 0x0F
+                write_access = cc_access & 0x0F
+
+                if read_access == 0x00:
+                    read_status = "Allowed"
+                else:
+                    read_status = f"Restricted (code {read_access:#x})"
+
+                if write_access == 0x00:
+                    write_status = "Allowed"
+                elif write_access == 0x0F:
+                    write_status = "Write-Protected"
+                else:
+                    write_status = f"Restricted (code {write_access:#x})"
+
+                gcode.respond_info(f"Read Access: {read_status}")
+                gcode.respond_info(f"Write Access: {write_status}")
+                gcode.respond_info(f"CC Bytes: {cc_data.hex()}")
+            else:
+                gcode.respond_info(f"Format: Non-NDEF or unformatted (CC magic: {cc_magic:#x})")
+        else:
+            gcode.respond_info("Could not read Capability Container")
+
+        gcode.respond_info("=======================")
 
 def load_config(config):
     return KlippyNFC(config)
