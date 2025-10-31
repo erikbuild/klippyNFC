@@ -422,14 +422,15 @@ class KlippyNFC:
             pages_data = bytearray()
 
             for page in range(start_page, start_page + count):
-                # mifareultralight_ReadPage returns (success, 4-byte page data)
-                success = self.nfc.mifareultralight_ReadPage(page, pages_data)
+                # mifareultralight_ReadPage returns 4-byte page data or None on failure
+                page_data = self.nfc.mifareultralight_ReadPage(page)
 
-                if not success:
+                if page_data is None or len(page_data) == 0:
                     logging.error(f"Failed to read page {page}")
                     return False, None
 
-                logging.debug(f"Read page {page}: {pages_data[-4:].hex()}")
+                pages_data.extend(page_data)
+                logging.debug(f"Read page {page}: {page_data.hex()}")
 
             logging.info(f"Read {count} pages ({len(pages_data)} bytes) starting from page {start_page}")
             return True, bytes(pages_data)
