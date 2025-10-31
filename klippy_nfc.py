@@ -241,8 +241,8 @@ class KlippyNFC:
                 while len(page_data) < 4:
                     page_data += b'\x00'
 
-                # Write page using ntag2xx_WritePage
-                success = self.nfc.ntag2xx_WritePage(page, list(page_data))
+                # Write page using mifareultralight_WritePage (NTAG uses same command)
+                success = self.nfc.mifareultralight_WritePage(page, bytearray(page_data))
 
                 if not success:
                     error_msg = f"Failed to write page {page}"
