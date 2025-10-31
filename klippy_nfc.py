@@ -134,6 +134,7 @@ class KlippyNFC:
         try:
             if len(ndef_bytes) < 5:
                 logging.error(f"NDEF message too short: {len(ndef_bytes)} bytes")
+                logging.error(f"Raw NDEF: {ndef_bytes.hex()}")
                 return False, None
 
             # Parse NDEF record header
@@ -142,15 +143,22 @@ class KlippyNFC:
             payload_length = ndef_bytes[2]
             record_type = ndef_bytes[3]
 
+            logging.info(f"NDEF header: flags={tnf_flags:#x}, type_len={type_length}, "
+                        f"payload_len={payload_length}, type={record_type:#x} ('{chr(record_type) if 32 <= record_type < 127 else '?'}')")
+            logging.info(f"Raw NDEF bytes: {ndef_bytes.hex()}")
+
             # Validate TNF (should be 0x01 = Well Known)
             tnf = tnf_flags & 0x07
             if tnf != 0x01:
                 logging.error(f"Invalid TNF: {tnf:#x}, expected 0x01 (Well Known)")
+                logging.error(f"This may not be a URI record. Raw NDEF: {ndef_bytes.hex()}")
                 return False, None
 
             # Validate record type (should be 'U' for URI)
             if record_type != ord('U'):
-                logging.error(f"Invalid record type: {record_type:#x}, expected 'U' (0x55)")
+                logging.error(f"Invalid record type: {record_type:#x} ('{chr(record_type) if 32 <= record_type < 127 else '?'}'), expected 'U' (0x55)")
+                logging.error(f"This may be a different NDEF type (Text='T', Android App='android.com:pkg', etc.)")
+                logging.error(f"Raw NDEF: {ndef_bytes.hex()}")
                 return False, None
 
             # Extract URI code and data
@@ -731,14 +739,14 @@ class KlippyNFC:
         # Read tag
         success, url, raw_ndef, metadata, _ = self._read_tag()
 
-        if not success:
-            gcode.respond_info("Error: Failed to read tag data")
-            return
-
-        # Display full tag details
+        # Display full tag details even if URL parsing failed
         gcode.respond_info("=== Tag Details ===")
         gcode.respond_info(f"UID: {uid.hex()}")
-        gcode.respond_info(f"URL: {url}")
+
+        if url:
+            gcode.respond_info(f"URL: {url}")
+        else:
+            gcode.respond_info("URL: (Could not parse - see raw NDEF below)")
 
         if metadata:
             gcode.respond_info(f"Tag Version: {metadata['version_major']}.{metadata['version_minor']}")
@@ -750,6 +758,15 @@ class KlippyNFC:
         if raw_ndef:
             gcode.respond_info(f"NDEF Length: {len(raw_ndef)} bytes")
             gcode.respond_info(f"NDEF Data: {raw_ndef.hex()}")
+
+            # Show NDEF structure hints
+            if len(raw_ndef) >= 4:
+                tnf = raw_ndef[0] & 0x07
+                rec_type = raw_ndef[3] if len(raw_ndef) > 3 else 0
+                gcode.respond_info(f"NDEF Type: TNF={tnf:#x}, Record Type={rec_type:#x} ('{chr(rec_type) if 32 <= rec_type < 127 else '?'}')")
+
+        if not success:
+            gcode.respond_info("Note: Tag read partially - check logs for details")
 
         gcode.respond_info("===================")
 
