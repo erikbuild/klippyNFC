@@ -3,7 +3,7 @@
 A Klipper plugin to read and write with a PN532 NFC module.
 
 Write an NFC Tag with the Klipper Web Interface URL.
-Experimental support for reading OpenPrintTags (COMING SOON!)
+Experimental support for working with OpenPrintTags (COMING SOON!)
 
 ## Table of Contents
 

@@ -110,46 +110,48 @@ class KlippyNFC:
     def _build_type2_memory(self, ndef_data):
         """Build Type 2 tag memory layout
 
-        Type 2 tags use 16-byte pages:
-        - Pages 0-3: UID + lock bytes (readonly, managed by PN532)
-        - Page 4: Capability Container
-        - Page 5+: NDEF message in TLV format
+        Type 2 tags (NTAG) memory structure:
+        - Pages 0-2: UID + lock bytes (readonly, managed by PN532)
+        - Page 3: Capability Container (CC)
+        - Page 4+: NDEF message in TLV format
 
-        Returns bytes representing the full memory content starting from page 4
+        Returns (cc_bytes, tlv_bytes) tuple where:
+        - cc_bytes: Capability Container (4 bytes) to write at page 3
+        - tlv_bytes: TLV data to write starting at page 4
         """
-        memory = bytearray()
-
-        # Page 4: Capability Container
+        # Capability Container (Page 3)
         # E1 = NDEF Magic Number
         # 10 = Version 1.0
-        # Size = (total_bytes / 8), we'll use a reasonable max
+        # Size = (total_bytes / 8), using 0x12 for NTAG213 (144 bytes)
         # 00 = Read/Write access
-        memory.extend([0xE1, 0x10, 0x6D, 0x00])  # CC: supports ~880 bytes
-        memory.extend([0x00] * 12)  # Rest of page 4
+        cc_bytes = bytearray([0xE1, 0x10, 0x12, 0x00])
 
-        # Page 5+: NDEF TLV
-        # 03 = NDEF Message TLV
+        # TLV blocks (Page 4+)
+        tlv_bytes = bytearray()
+
+        # NDEF Message TLV
+        # 03 = NDEF Message TLV type
         # Length byte(s)
         # NDEF message
         # FE = Terminator TLV
-        memory.append(0x03)  # NDEF Message TLV
+        tlv_bytes.append(0x03)  # NDEF Message TLV
 
         # Length encoding (1 or 3 bytes)
         if len(ndef_data) < 255:
-            memory.append(len(ndef_data))
+            tlv_bytes.append(len(ndef_data))
         else:
-            memory.append(0xFF)
-            memory.append((len(ndef_data) >> 8) & 0xFF)
-            memory.append(len(ndef_data) & 0xFF)
+            tlv_bytes.append(0xFF)
+            tlv_bytes.append((len(ndef_data) >> 8) & 0xFF)
+            tlv_bytes.append(len(ndef_data) & 0xFF)
 
-        memory.extend(ndef_data)
-        memory.append(0xFE)  # Terminator TLV
+        tlv_bytes.extend(ndef_data)
+        tlv_bytes.append(0xFE)  # Terminator TLV
 
-        # Pad to 16-byte boundary
-        while len(memory) % 16 != 0:
-            memory.append(0x00)
+        # Pad to 4-byte boundary
+        while len(tlv_bytes) % 4 != 0:
+            tlv_bytes.append(0x00)
 
-        return bytes(memory)
+        return bytes(cc_bytes), bytes(tlv_bytes)
 
     def _init_pn532(self):
         """Initialize the PN532 hardware"""
@@ -224,18 +226,26 @@ class KlippyNFC:
         try:
             # Build NDEF message
             ndef_data = self._build_ndef_uri_record(url)
-            memory = self._build_type2_memory(ndef_data)
+            cc_bytes, tlv_bytes = self._build_type2_memory(ndef_data)
 
-            logging.info(f"Writing {len(memory)} bytes to tag")
+            total_bytes = len(cc_bytes) + len(tlv_bytes)
+            logging.info(f"Writing {total_bytes} bytes to tag (CC: {len(cc_bytes)}, TLV: {len(tlv_bytes)})")
 
-            # Write memory to tag, starting at page 4
-            # (Pages 0-3 contain UID and are readonly)
+            # Write Capability Container to page 3
+            success = self.nfc.mifareultralight_WritePage(3, bytearray(cc_bytes))
+            if not success:
+                error_msg = "Failed to write Capability Container (page 3)"
+                logging.error(error_msg)
+                return False, error_msg
+            logging.info(f"Wrote page 3 (CC): {cc_bytes.hex()}")
+
+            # Write TLV data starting at page 4
             page = 4
             offset = 0
 
-            while offset < len(memory):
+            while offset < len(tlv_bytes):
                 # Get 4 bytes for this page
-                page_data = memory[offset:offset+4]
+                page_data = tlv_bytes[offset:offset+4]
 
                 # Pad to 4 bytes if needed
                 while len(page_data) < 4:
@@ -254,7 +264,7 @@ class KlippyNFC:
                 page += 1
                 offset += 4
 
-            success_msg = f"Successfully wrote {len(memory)} bytes ({(len(memory)+3)//4} pages)"
+            success_msg = f"Successfully wrote {total_bytes} bytes (1 CC page + {(len(tlv_bytes)+3)//4} TLV pages)"
             logging.info(success_msg)
             return True, success_msg
 
