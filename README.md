@@ -26,9 +26,9 @@ Experimental support for working with OpenPrintTags (COMING SOON!)
 ### Required Hardware
 
 - **PN532 NFC Breakout Board**
-  - Common vendors: Adafruit, Elechouse, generic modules
+  - HiLetGo / Elechouse Generic board: https://amzn.to/49rhoYL (affiliate link)
   - Must support SPI mode (most do)
-  - ~$8-15 USD
+  - ~$8-10 USD
 
 - **Raspberry Pi with SPI**
   - Tested on: Raspberry Pi 4, Pi 3B+
@@ -43,10 +43,12 @@ Experimental support for working with OpenPrintTags (COMING SOON!)
 ### NFC Tags (Recommended)
 
 **Best Choice: NTAG215**
+- Black 25mm Adhesive NTAG215 https://amzn.to/4oRBIHr (affiliate link)
+- White 25mm Adhesive NTAG215 https://amzn.to/47iB1kn (affiliate link)
 - 504 bytes usable memory (plenty for URLs)
 - Works with all modern phones (iPhone 7+, Android)
 - Standard NFC Forum Type 2 tag
-- Cost: ~$0.25-0.50 per tag in bulk
+- Cost: ~$0.25 per tag in bulk
 
 **Alternative Options:**
 - **NTAG213** - 144 bytes (sufficient for most URLs, cheaper)
