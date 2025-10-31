@@ -1,12 +1,9 @@
-# KlippyNFC - NFC Tag Writer for Klipper
+# KlippyNFC - NFC Tag Reader/Writer for Klipper and PN532 Modules
 
-A Klipper plugin that uses a PN532 NFC module to write NFC tags with your Klipper web interface URL. Write tags, then tap your phone to them anytime to instantly access your printer's Mainsail or Fluidd interface.
+A Klipper plugin to read and write with a PN532 NFC module.
 
-**Perfect for:**
-- Quick access to printer web interface from your phone
-- Labeling multiple printers in a farm
-
----
+Write an NFC Tag with the Klipper Web Interface URL.
+Experimental support for reading OpenPrintTags (COMING SOON!)
 
 ## Table of Contents
 
