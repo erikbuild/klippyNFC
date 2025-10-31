@@ -435,7 +435,10 @@ class KlippyNFC:
             current_page = start_page
 
             while pages_read < count:
-                # Read starting at current_page (returns tuple: (success, 16 bytes = 4 pages))
+                # Read starting at current_page
+                # NOTE: mifareultralight_ReadPage behavior varies by library:
+                # - Some return 16 bytes (4 pages starting from requested page)
+                # - Some return 4 bytes (1 page only)
                 result = self.nfc.mifareultralight_ReadPage(current_page)
 
                 # Handle tuple return value (success, data)
@@ -455,11 +458,19 @@ class KlippyNFC:
                 if isinstance(read_data, (list, bytearray)):
                     read_data = bytes(read_data)
 
-                logging.debug(f"Read from page {current_page}: {read_data.hex()} ({len(read_data)} bytes)")
+                logging.info(f"Read from page {current_page}: {read_data.hex()} ({len(read_data)} bytes)")
+
+                # Determine how many pages were actually returned
+                bytes_returned = len(read_data)
+                pages_returned = bytes_returned // 4
+
+                if pages_returned == 0:
+                    logging.error(f"Invalid read: got {bytes_returned} bytes from page {current_page}")
+                    return False, None
 
                 # Calculate how many pages we need from this read
                 pages_remaining = count - pages_read
-                pages_to_take = min(4, pages_remaining)
+                pages_to_take = min(pages_returned, pages_remaining)
 
                 # Extract only the bytes we need (4 bytes per page)
                 bytes_to_take = pages_to_take * 4
