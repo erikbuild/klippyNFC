@@ -161,13 +161,18 @@ class KlippyNFC:
                 logging.error(f"Raw NDEF: {ndef_bytes.hex()}")
                 return False, None
 
+            # Calculate payload start position
+            # NDEF structure: flags(1) + type_len(1) + payload_len(1) + type(type_length) + payload
+            payload_start = 3 + type_length
+            total_length_needed = payload_start + payload_length
+
             # Extract URI code and data
-            if len(ndef_bytes) < 5 + payload_length:
-                logging.error(f"NDEF payload truncated: expected {5 + payload_length}, got {len(ndef_bytes)}")
+            if len(ndef_bytes) < total_length_needed:
+                logging.error(f"NDEF payload truncated: expected {total_length_needed}, got {len(ndef_bytes)}")
                 return False, None
 
-            uri_code = ndef_bytes[4]
-            uri_data = ndef_bytes[5:5 + payload_length - 1].decode('utf-8')
+            uri_code = ndef_bytes[payload_start]
+            uri_data = ndef_bytes[payload_start + 1:payload_start + payload_length].decode('utf-8')
 
             # Decompress URI prefix
             uri_prefixes = {
