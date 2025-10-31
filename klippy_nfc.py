@@ -427,12 +427,21 @@ class KlippyNFC:
             current_page = start_page
 
             while pages_read < count:
-                # Read starting at current_page (returns 16 bytes = 4 pages)
-                read_data = self.nfc.mifareultralight_ReadPage(current_page)
+                # Read starting at current_page (returns tuple: (success, 16 bytes = 4 pages))
+                result = self.nfc.mifareultralight_ReadPage(current_page)
 
-                if read_data is None:
-                    logging.error(f"Failed to read from page {current_page}")
-                    return False, None
+                # Handle tuple return value (success, data)
+                if isinstance(result, tuple):
+                    success, read_data = result
+                    if not success or read_data is None:
+                        logging.error(f"Failed to read from page {current_page}")
+                        return False, None
+                else:
+                    # Fallback if API returns data directly
+                    read_data = result
+                    if read_data is None:
+                        logging.error(f"Failed to read from page {current_page}")
+                        return False, None
 
                 # Convert to bytes if needed
                 if isinstance(read_data, (list, bytearray)):
