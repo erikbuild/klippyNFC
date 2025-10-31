@@ -166,8 +166,17 @@ class KlippyNFC:
             self.nfc.begin()
 
             # Get firmware version to verify communication
-            version = self.nfc.getFirmwareVersion()
-            if not version:
+            # Some PN532 boards (Elechouse) need multiple attempts
+            version = None
+            for attempt in range(5):
+                version = self.nfc.getFirmwareVersion()
+                if version and version != 0:
+                    break
+                if attempt < 4:
+                    logging.info(f"getFirmwareVersion attempt {attempt + 1} returned {version:#x}, retrying...")
+                    time.sleep(0.2)
+
+            if not version or version == 0:
                 raise RuntimeError("Failed to communicate with PN532")
 
             logging.info(f"PN532 firmware version: {version:#x}")
