@@ -1,32 +1,25 @@
 # KlippyNFC - NFC Tag Writer for Klipper
 
-A Klipper plugin that uses a PN532 NFC module to write NFC tags with your Klipper web interface URL. Write tags once, then tap your phone to them anytime to instantly access your printer's Mainsail, Fluidd, or Moonraker interface.
+A Klipper plugin that uses a PN532 NFC module to write NFC tags with your Klipper web interface URL. Write tags, then tap your phone to them anytime to instantly access your printer's Mainsail or Fluidd interface.
 
 **Perfect for:**
 - Quick access to printer web interface from your phone
-- Sharing printer access with others (guests, family, colleagues)
 - Labeling multiple printers in a farm
-- Creating portable "business cards" for your printer setup
 
 ---
 
 ## Table of Contents
 
 - [Hardware Requirements](#hardware-requirements)
-- [Quick Start](#quick-start)
-- [Detailed Installation](#detailed-installation)
+- [Setup](#setup)
 - [Usage](#usage)
   - [First-Time Tag Writing](#first-time-tag-writing)
   - [G-Code Commands Reference](#g-code-commands-reference)
   - [Common Workflows](#common-workflows)
 - [Troubleshooting](#troubleshooting)
   - [Hardware Issues](#hardware-issues)
-  - [Tag Detection Issues](#tag-detection-issues)
-  - [Network/URL Issues](#networkurl-issues)
   - [Debugging](#debugging)
-- [FAQ](#frequently-asked-questions-faq)
 - [Technical Details](#technical-details)
-- [Limitations](#limitations)
 - [Future Enhancements](#future-enhancements)
 
 ---
@@ -46,9 +39,8 @@ A Klipper plugin that uses a PN532 NFC module to write NFC tags with your Klippe
   - SPI interface must be enabled
 
 - **External Power Supply for PN532**
-  - **CRITICAL:** PN532 draws too much current for Pi's 3.3V regulator
   - Use external 3.3V or 5V power supply (check your PN532 voltage rating)
-  - Recommended: Share Pi's 5V rail with proper decoupling capacitor
+  - Recommended: Share Pi's 5V rail with proper decoupling capacitor (some boards include this)
   - **DO NOT** power PN532 from Pi's 3.3V pin - causes brownouts
 
 ### NFC Tags (Recommended)
@@ -64,30 +56,11 @@ A Klipper plugin that uses a PN532 NFC module to write NFC tags with your Klippe
 - **NTAG216** - 888 bytes (overkill for URLs, more expensive)
 - **MIFARE Ultralight** - 48 bytes (too small, not recommended)
 
-**Where to Buy:**
-- Amazon: Search "NTAG215 blank NFC tags"
-- AliExpress: Bulk packs (100+ tags) for best pricing
-
-**Physical Formats:**
-- Round stickers (20-30mm diameter) - most common
-
 ### Wiring Supplies
 
 - Jumper wires (female-to-female recommended)
-- Breadboard (optional, for testing)
-- Soldering iron (if you want permanent connections)
 
-## Quick Start
-
-1. **Enable SPI:** `sudo raspi-config` → Interface Options → SPI → Enable → Reboot
-2. **Install library:** `~/klippy-env/bin/pip install pn532pi`
-3. **Copy plugin:** `cp klippy_nfc.py ~/klipper/klippy/extras/`
-4. **Wire PN532** (see wiring table below)
-5. **Add config** to `printer.cfg` (see configuration section)
-6. **Restart Klipper:** `sudo systemctl restart klipper`
-7. **Write a tag:** Place blank tag on PN532, run `NFC_WRITE_TAG` in console
-
-## Detailed Installation
+## Setup
 
 ### Step 1: Enable SPI on Raspberry Pi
 
@@ -162,7 +135,6 @@ Before wiring, configure the PN532 mode switches:
 - **Options for proper power:**
   - Use external 3.3V/5V power supply with shared ground
   - Connect to Pi's 5V pin (Pin 2 or 4) **only if** your PN532 has a 5V→3.3V regulator
-  - Use a breadboard power supply
 - When in doubt, check your PN532's voltage rating and current requirements
 
 **Wiring Diagram:**
@@ -174,7 +146,7 @@ Raspberry Pi          PN532 (SPI Mode)
 │  Pin 19  │────────▶│ MOSI       │
 │  Pin 24  │────────▶│ SS         │
 │  Pin 6   │────────▶│ GND        │
-│ External │────────▶│ VCC        │
+│  Pin 2   │────────▶│ VCC        │
 └──────────┘         └────────────┘
 ```
 
@@ -363,58 +335,6 @@ NFC URL updated to: http://192.168.1.100:7125
 - Change persists until Klipper restart (reverts to config/auto-detected URL)
 - Use this for writing multiple tags with different URLs
 
-### Common Workflows
-
-#### Single Printer Setup
-
-Write one tag and stick it to your printer enclosure:
-
-```gcode
-NFC_WRITE_TAG
-```
-
-Tap your phone to the tag whenever you need quick access.
-
-#### Multiple Printer Farm
-
-Write different tags for each printer:
-
-```gcode
-# Printer 1
-NFC_SET_URL URL=http://prusawire.local:7125
-NFC_WRITE_TAG
-
-# Printer 2
-NFC_SET_URL URL=http://voron-24.local:7125
-NFC_WRITE_TAG
-
-# Printer 3
-NFC_SET_URL URL=http://prusa-mk4.local:7125
-NFC_WRITE_TAG
-```
-
-Label and attach tags to each printer.
-
-### Using Written Tags
-
-Once a tag is written, anyone with a compatible phone can use it:
-
-**iPhone (iOS 14+):**
-1. Hold phone near tag (screen on, no app needed)
-2. Notification appears at top of screen
-3. Tap notification to open URL in Safari
-
-**Android:**
-1. Ensure NFC is enabled in Settings
-2. Hold phone near tag (screen on, unlocked)
-3. Browser opens automatically with URL
-
-**Tips:**
-- Tags work through thin materials (stickers, paper, thin plastic)
-- Don't cover tags with metal - blocks NFC signal
-- Tags are read-only after writing (can't be accidentally erased by phone)
-- Tags work indefinitely - no battery or maintenance needed
-
 ## Troubleshooting
 
 ### Phone Compatibility
@@ -422,23 +342,12 @@ Once a tag is written, anyone with a compatible phone can use it:
 Physical NFC tags written by this plugin are standard NDEF format and work with:
 
 - ✅ **iPhone 7 and later** (iOS 14+ required for automatic reading)
-  - iPhone 7, 8, X, XR, XS, 11, 12, 13, 14, 15, 16
   - Works in background - no app needed
   - Notification appears when tag is detected
 
 - ✅ **Android phones with NFC** (Android 4.0+)
-  - Samsung Galaxy S series, Google Pixel, OnePlus, etc.
   - NFC must be enabled in Settings
   - Opens browser automatically
-
-- ✅ **Other NFC-enabled devices**
-  - Some smartwatches
-  - Tablets with NFC
-
-**Not compatible:**
-- ❌ iPhone 6 and earlier (no NFC hardware)
-- ❌ Phones without NFC capability
-- ❌ Devices with NFC disabled in settings
 
 ### Hardware Issues
 
@@ -490,154 +399,6 @@ Physical NFC tags written by this plugin are standard NDEF format and work with:
 ~/klippy-env/bin/pip uninstall pn532pi
 ~/klippy-env/bin/pip install pn532pi
 ```
-
-#### Random Resets, Brownouts, or Intermittent Failures
-
-**Symptoms:**
-- PN532 works sometimes, fails other times
-- Raspberry Pi reboots unexpectedly
-- "Failed to communicate with PN532" errors
-
-**Cause:** Power supply issues
-
-**Solution:**
-1. **Use external power supply** - 3.3V or 5V depending on your PN532 board
-2. Add **decoupling capacitor** (10-100μF) across VCC and GND near PN532
-3. Use **shorter wires** (< 6 inches) to reduce voltage drop
-4. Ensure **adequate PSU** for your Raspberry Pi (3A minimum for Pi 4)
-
-### Tag Detection Issues
-
-#### "No NFC tag detected"
-
-**Symptom:** `NFC_WRITE_TAG` command returns "Error: No NFC tag detected"
-
-**Causes and fixes:**
-
-1. **Tag not compatible**
-   - ✅ Compatible: NTAG213, NTAG215, NTAG216, MIFARE Ultralight
-   - ❌ Not compatible: MIFARE Classic, MIFARE DESFire, other proprietary formats
-   - Check tag specifications from vendor
-
-2. **Poor tag placement**
-   - Place tag **flat** against PN532 antenna
-   - Center tag over the chip (usually marked on PCB)
-   - Remove any thick protective cases
-   - Try different orientations
-
-3. **Tag already written/locked**
-   - Some tags can be write-protected
-   - Try a fresh, confirmed-blank tag
-   - Use a phone NFC app to check tag status
-
-4. **Phone interfering**
-   - Keep your phone **away** from PN532 during writing
-   - Phone's NFC can interfere with detection
-
-5. **Tag damaged**
-   - NFC tags can be damaged by:
-     - Static electricity
-     - Bending/creasing
-     - Exposure to strong magnetic fields
-   - Try a different tag
-
-#### Tag Detected But Write Fails
-
-**Symptom:** "Tag detected" message but then "Failed to write page X"
-
-**Causes:**
-1. **Write-protected tag**
-   - Some tags have write-protection bits set
-   - Cannot be undone on NTAG tags
-   - Use a fresh blank tag
-
-2. **Insufficient tag memory**
-   - Long URLs may not fit on NTAG213 (144 bytes)
-   - Use NTAG215 (504 bytes) or NTAG216 (888 bytes)
-   - Or use shorter URL (IP instead of hostname)
-
-3. **Tag communication error**
-   - Improve power supply stability
-   - Keep tag stationary during write
-   - Reduce electrical noise (move away from motors, power supplies)
-
-### Network/URL Issues
-
-#### "URL shows 'printer.local' but doesn't work"
-
-**Symptom:** Tag is written successfully but phone can't reach printer
-
-**Causes:**
-1. **mDNS not working on network**
-   - Some networks block mDNS (.local domains)
-   - Corporate/guest WiFi often blocks it
-   - Phone and printer on different subnets
-
-**Solutions:**
-```ini
-# Use explicit IP address in config
-[klippy_nfc]
-url: http://192.168.1.100:7125
-
-# Or use a static hostname (if you have local DNS)
-url: http://ender3.home:7125
-```
-
-#### Phone Opens Wrong URL
-
-**Symptom:** Tag works but opens incorrect address
-
-**Cause:** Tag contains old/wrong URL
-
-**Solution:**
-```gcode
-# Verify current URL
-NFC_STATUS
-
-# Update URL
-NFC_SET_URL URL=http://correct-address:7125
-
-# Write new tag (tags can't be rewritten - use fresh tag)
-NFC_WRITE_TAG
-```
-
-**Note:** NTAG tags **cannot be fully erased** after writing. Always use a fresh blank tag for corrections.
-
-### iPhone-Specific Issues
-
-#### iPhone Not Detecting Tags
-
-**Requirements:**
-- iPhone 7 or later (has NFC hardware)
-- iOS 14 or later (for background NFC reading)
-- Screen must be on (locked or unlocked OK)
-
-**Troubleshooting:**
-1. **Update iOS** to latest version
-2. **Enable NFC** (should be on by default)
-3. **Try different tag position** - iPhone's NFC antenna location varies by model:
-   - iPhone 7-8: Top back
-   - iPhone X and later: Top front (camera area)
-4. **Remove thick case** - may block NFC
-5. **Test with another tag** - confirm tag works on Android first
-
-#### iPhone Shows Notification But Nothing Happens
-
-**Cause:** Need to tap the notification
-
-**Solution:** When notification appears, **tap it** to open URL in Safari
-
-### Android-Specific Issues
-
-#### Android Not Detecting Tags
-
-1. **Enable NFC** in Settings:
-   - Settings → Connected Devices → Connection Preferences → NFC
-   - Toggle NFC to ON
-
-2. **Screen must be on and unlocked** (most Android devices)
-
-3. **Try NFC Tools app** (free) to verify tag is readable
 
 ### Debugging
 
@@ -710,107 +471,6 @@ If this fails, it's a hardware/wiring issue, not a Klipper issue.
 | `Failed to write page X` | Write operation failed | Check tag protection, memory |
 | `Chip select must be 1 or 0` | Invalid config value | Fix `spi_ce` in printer.cfg |
 
-## Frequently Asked Questions (FAQ)
-
-### General Questions
-
-**Q: Can I rewrite a tag if I made a mistake?**
-
-A: No. NTAG tags are write-once for data sectors. Once written, the NDEF data cannot be fully erased. Always use a fresh blank tag if you need to change the URL.
-
-**Q: How many tags can I write?**
-
-A: Unlimited. The PN532 can write as many tags as you have blank tags available.
-
-**Q: Do tags need batteries?**
-
-A: No. NFC tags are passive devices powered by the phone's NFC field when read. They last indefinitely.
-
-**Q: Can tags be read by multiple phones?**
-
-A: Yes. Tags can be read by any NFC-enabled phone unlimited times.
-
-**Q: Will this work with my phone?**
-
-A: If your phone has NFC and is iPhone 7+ (iOS 14+) or Android 4.0+, yes.
-
-**Q: How close does my phone need to be?**
-
-A: Within ~1-2 inches (2-5 cm). NFC is very short range by design.
-
-### Setup Questions
-
-**Q: Do I need to keep the PN532 connected after writing tags?**
-
-A: No. You can disconnect the PN532 after writing all your tags. It's only needed for writing, not for using the tags. However, leaving it connected allows you to write new tags anytime via G-code.
-
-**Q: Can I use I2C or UART instead of SPI?**
-
-A: Currently only SPI is supported. I2C/UART support could be added in the future if there's demand.
-
-**Q: Why do I need external power for PN532?**
-
-A: The PN532 draws 100-150mA peak current, exceeding the Pi's 3.3V regulator capacity (50mA). Using Pi's 3.3V causes voltage drops and communication failures. You can most likely use the Pi's 5V pin as long as you are using a decent power supply for the Pi.
-
-**Q: Can I use this with OctoPrint instead of Klipper?**
-
-A: This plugin is Klipper-specific. An OctoPrint version would need to be written separately.
-
-### Tag Questions
-
-**Q: What's the difference between NTAG213, NTAG215, and NTAG216?**
-
-A: Memory size:
-- NTAG213: 144 bytes user memory (~25-30 character URL)
-- NTAG215: 504 bytes user memory (~90 character URL)
-- NTAG216: 888 bytes user memory (~160 character URL)
-
-NTAG215 is recommended for most URLs.
-
-**Q: Can I use MIFARE Classic tags?**
-
-A: No. This plugin only supports NTAG and MIFARE Ultralight (Type 2 tags). MIFARE Classic uses a different protocol.
-
-**Q: Will tags stop working after some time?**
-
-A: No. NFC tags have no wear-out mechanism and will last decades under normal conditions.
-
-**Q: How do I know if a tag is blank?**
-
-A: Use a phone app like "NFC Tools" (iOS/Android) to read the tag. Blank tags show empty user memory.
-
-### Printing Questions
-
-**Q: Does writing a tag pause my print?**
-
-A: The write command blocks G-code execution for 1-2 seconds. Don't write tags during critical print operations. Write tags when idle.
-
-**Q: Can I trigger tag writing from G-code macros?**
-
-A: Yes, you can include `NFC_WRITE_TAG` in macros, but be aware it blocks execution briefly.
-
-### Troubleshooting Questions
-
-**Q: Why does my phone say "No supported app for this NFC tag"?**
-
-A: This usually means the tag write failed or the tag is corrupted. Try writing a fresh tag and verify with `NFC_STATUS` that write was successful.
-
-**Q: The tag works on Android but not iPhone - why?**
-
-A: Ensure iPhone is running iOS 14+ and the screen is on. Try holding the phone in different positions - iPhones have the NFC antenna in different locations depending on model.
-
-**Q: Can I make the URL shorter to fit on smaller tags?**
-
-A: Yes. Use an IP address instead of hostname (`192.168.1.5` instead of `my-long-printer-hostname.local`), or use a custom port 80 to omit the port number (`http://printer.local` instead of `http://printer.local:7125`).
-
-**Q: My PN532 red LED is on but nothing works - what's wrong?**
-
-A: Red LED indicates power only. Check:
-- SPI mode switches (SW1=OFF, SW2=ON)
-- Wiring connections
-- SPI enabled on Pi
-- Check Klipper logs for specific errors
-
 ## Technical Details
 
 ### NFC Technology
@@ -860,48 +520,6 @@ The plugin automatically discovers your web interface URL:
 - `http://mainsailos.local:80` (hostname with mDNS)
 - `http://192.168.1.100:80` (IP address)
 - `http://prusawire:80` (custom hostname)
-
-
-### Operation Characteristics
-
-**Performance:**
-- Tag detection: < 1 second
-- Tag write: 1-2 seconds (depends on URL length)
-- Blocking operation: G-code execution pauses during write
-- Power consumption: ~100mA @ 3.3V during active operation
-
-**Reliability:**
-- Write verification: Each page write returns success/fail status
-- No retry mechanism: If write fails, operation aborts
-- Tag state: Partially written tags may be corrupted - discard and use fresh tag
-
-**Compatibility:**
-- Klipper: 0.10.0+ (any recent version)
-- Python: 3.7+ (Klipper's Python environment)
-- pn532pi: 1.6+ (latest recommended)
-- PN532 Firmware: All versions (standard firmware)
-
-## Limitations
-
-- ✅ **What works:**
-  - Standard NTAG and MIFARE Ultralight tags (Type 2)
-  - URLs up to ~800 characters (depending on tag memory)
-  - Universal phone compatibility (iPhone 7+, Android 4.0+)
-  - Unlimited tag writes (one tag at a time)
-
-- ❌ **What doesn't work:**
-  - Rewriting existing tags (tags are write-once for data)
-  - MIFARE Classic or DESFire tags (different protocols)
-  - Encrypted/secured tags
-  - Reading data back from tags
-  - Simultaneous multiple tag writing
-  - Background tag writing (blocks during operation)
-
-- ⚠️ **Known issues:**
-  - Requires 5V from Pi OR 3.3V external power for PN532 (Pi's 3.3V insufficient)
-  - Write operation blocks G-code for 1-2 seconds
-  - No visual feedback during write (check logs or console)
-  - Cannot detect write failures on locked tags until write attempt
 
 ## Future Enhancements
 
