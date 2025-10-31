@@ -202,8 +202,8 @@ class KlippyNFC:
         """
         try:
             # Read passive target (Type A, 106 kbps)
-            # cardbaudrate = 0 for Type A tags
-            uid = self.nfc.readPassiveTargetID(timeout=timeout_ms)
+            # cardbaudrate = 0 for Type A tags (ISO14443A at 106 kbps)
+            uid = self.nfc.readPassiveTargetID(cardbaudrate=0, timeout=timeout_ms)
 
             if uid and len(uid) > 0:
                 logging.info(f"Tag detected: UID = {uid.hex()}")
