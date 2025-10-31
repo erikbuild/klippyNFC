@@ -61,6 +61,13 @@ class KlippyNFC:
                 s.close()
             except Exception:
                 hostname = "printer.local"
+        else:
+            # Append .local for mDNS resolution if needed
+            # Don't append if:
+            # - Already has .local suffix
+            # - Contains a dot (already FQDN or IP-like)
+            if not hostname.endswith('.local') and '.' not in hostname:
+                hostname = f"{hostname}.local"
 
         return f"http://{hostname}:{self.port}"
 

@@ -397,40 +397,6 @@ Physical NFC tags written by this plugin are standard NDEF format and work with:
 ~/klippy-env/bin/pip install pn532pi
 ```
 
-### Debugging
-
-#### Check Klipper Logs
-
-View NFC-related log messages:
-```bash
-# Tail logs in real-time
-tail -f /tmp/klippy.log | grep -i nfc
-
-# View recent logs
-tail -100 /tmp/klippy.log | grep -i nfc
-
-# View all NFC logs
-grep -i nfc /tmp/klippy.log
-```
-
-**What to look for:**
-```
-# Good - initialization successful
-NFC tag writer ready. Use NFC_WRITE_TAG to write tags with URL: http://...
-PN532 firmware version: 0x32
-
-# Bad - hardware not detected
-Failed to initialize PN532: ...
-Failed to communicate with PN532
-
-# During tag write
-Scanning for NFC tag...
-Tag detected: 04abc123...
-Writing URL: http://...
-Wrote page 4: e1106d00...
-Successfully wrote 48 bytes (12 pages)
-```
-
 #### Test PN532 Directly
 
 Verify PN532 works outside of Klipper:
@@ -470,40 +436,6 @@ If this fails, it's a hardware/wiring issue, not a Klipper issue.
 
 ## Technical Details
 
-### NFC Technology
-
-**Tag Type:** NFC Forum Type 2 Tag
-- Based on ISO/IEC 14443-3 Type A protocol
-- Operates at 13.56 MHz
-- Compatible tags: NTAG213/215/216, MIFARE Ultralight
-
-**NDEF Format:**
-- URI Record Type with prefix compression
-- Standard NFC Data Exchange Format
-- Universal compatibility across all NFC phones
-
-**Memory Layout (Type 2 tags):**
-```
-Page 0-3:  UID and lock bytes (read-only, managed by tag chip)
-Page 4:    Capability Container (CC)
-           - Magic: 0xE1
-           - Version: 0x10
-           - Size: 0x6D (880 bytes)
-           - Access: 0x00 (read/write)
-Page 5+:   NDEF message in TLV format
-           - TLV Type: 0x03 (NDEF Message)
-           - TLV Length: varies
-           - NDEF data: URL record
-           - Terminator: 0xFE
-```
-
-**Write Process:**
-1. Scan for tag using `readPassiveTargetID()` (5-second timeout)
-2. Build NDEF URI record with URL prefix compression
-3. Format as Type 2 memory layout
-4. Write page-by-page (4 bytes per page) using `ntag2xx_WritePage()`
-5. Start at page 4 (pages 0-3 are read-only UID/locks)
-
 ### URL Discovery
 
 The plugin automatically discovers your web interface URL:
@@ -516,22 +448,13 @@ The plugin automatically discovers your web interface URL:
 **Example auto-detected URLs:**
 - `http://mainsailos.local:80` (hostname with mDNS)
 - `http://192.168.1.100:80` (IP address)
-- `http://prusawire:80` (custom hostname)
+- `http://prusawire.local:80` (custom hostname)
 
 ## Future Enhancements
 
 **Planned Features:**
 - Tag reading capability (verify written URL)
-
-**Potential Features:**
-- I2C and UART interface support
-- Material/filament tracking with NFC tags
-- Print job information embedding
-- Access control via NFC authentication
-- Integration with Klipper's notification system
-- QR code generation alongside NFC tags
-- Multi-URL tags (select URL based on context)
-- Custom NDEF records (not just URLs)
+- OpenPrintTag!
 
 ## License
 
@@ -544,4 +467,3 @@ Contributions welcome! Please test thoroughly with your hardware before submitti
 ## Acknowledgments
 
 - Built on [pn532pi](https://github.com/gassajor000/pn532pi) by gassajor000
-- Inspired by Seeed Studio's PN532 Arduino library
